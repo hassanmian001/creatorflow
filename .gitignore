@@ -7,6 +7,10 @@ Tools/
 # Build output from Publish-Release.ps1.
 dist/
 
+# The one-file copy-to-USB package. It contains the runtime, so it is far past
+# what belongs in a repository.
+CreatorFlow-Full-Setup.zip
+
 # Never commit a token. Publish-Release.ps1 reads it from $env:GITHUB_TOKEN.
 *.token
 .env
