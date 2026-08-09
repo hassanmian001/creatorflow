@@ -14,6 +14,18 @@ $script:UpdateRepo = 'creatorflow'
 $script:UpdateManifestName = 'update.json'
 $script:UpdatePackageName = 'CreatorFlow-app.zip'
 
+# FFmpeg is published as a release asset rather than committed, because a single
+# 141 MB executable is past GitHub's 100 MB file limit while release assets allow
+# up to 2 GB. It is uploaded once and only rebuilt when the runtime is replaced,
+# so the installer can be a few kilobytes and still set up a computer from
+# nothing.
+#
+# It lives under its own fixed tag rather than with the newest release. Pointing
+# at "latest" would break every fresh install the moment an application-only
+# release was published, because that release does not carry the runtime.
+$script:UpdateRuntimeName = 'CreatorFlow-runtime.zip'
+$script:UpdateRuntimeTag = 'runtime-7.1.1'
+
 function Get-AppVersion {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)][string]$AppRoot)
@@ -40,6 +52,14 @@ function Get-UpdateManifestUrl {
 
 function Get-UpdatePackageUrl {
     return "https://github.com/$script:UpdateOwner/$script:UpdateRepo/releases/latest/download/$script:UpdatePackageName"
+}
+
+function Get-UpdateRuntimeUrl {
+    return "https://github.com/$script:UpdateOwner/$script:UpdateRepo/releases/download/$script:UpdateRuntimeTag/$script:UpdateRuntimeName"
+}
+
+function Get-UpdateRuntimeTag {
+    return $script:UpdateRuntimeTag
 }
 
 function Get-AvailableUpdate {
@@ -178,6 +198,8 @@ Export-ModuleMember -Function @(
     'Test-UpdateConfigured',
     'Get-UpdateManifestUrl',
     'Get-UpdatePackageUrl',
+    'Get-UpdateRuntimeUrl',
+    'Get-UpdateRuntimeTag',
     'Get-AvailableUpdate',
     'Save-UpdatePackage',
     'Start-UpdateInstall'

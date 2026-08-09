@@ -45,6 +45,8 @@ $appItems = @(
     'SlideshowRenderWorker.ps1',
     'SlideshowBatchWorker.ps1',
     'Apply-Update.ps1',
+    'Install.ps1',
+    'Install.bat',
     'Uninstall.ps1',
     'Start Tool.bat',
     'VERSION',
@@ -86,19 +88,67 @@ try {
         Copy-Item -LiteralPath $source -Destination (Join-Path $InstallDirectory $name) -Recurse -Force
     }
 
-    # The runtime is copied only when the target does not already have one, so
-    # reinstalling stays fast and an existing FFmpeg is never disturbed.
+    # The runtime is handled in three ways, cheapest first: keep one that is
+    # already installed, copy one sitting beside the installer, or download the
+    # published one. That last case is what lets a few-kilobyte installer set up
+    # a computer that has never seen this tool.
     $sourceTools = Join-Path $sourceRoot 'Tools'
     $targetTools = Join-Path $InstallDirectory 'Tools'
-    if (Test-Path -LiteralPath $targetTools -PathType Container) {
-        Write-Step 'Runtime already present, keeping it.'
+    $ffmpegProbe = 'FFmpeg-7.1.1\ffmpeg-7.1.1-full_build\bin\ffmpeg.exe'
+    if (Test-Path -LiteralPath (Join-Path $targetTools $ffmpegProbe) -PathType Leaf) {
+        Write-Step 'Runtime already installed, keeping it.'
     }
-    elseif (Test-Path -LiteralPath $sourceTools -PathType Container) {
+    elseif (Test-Path -LiteralPath (Join-Path $sourceTools $ffmpegProbe) -PathType Leaf) {
         Write-Step 'Copying FFmpeg runtime (about 283 MB, one time)...'
         Copy-Item -LiteralPath $sourceTools -Destination $targetTools -Recurse -Force
     }
     else {
-        Write-Step 'WARNING: no Tools folder found; FFmpeg will have to be provided separately.'
+        $runtimeUrl = ''
+        try {
+            Import-Module (Join-Path $InstallDirectory 'SlideshowUpdate.psm1') -Force -ErrorAction Stop
+            if (Test-UpdateConfigured) { $runtimeUrl = Get-UpdateRuntimeUrl }
+        }
+        catch {}
+
+        if ([string]::IsNullOrWhiteSpace($runtimeUrl)) {
+            throw @"
+No FFmpeg runtime was found and none could be downloaded.
+
+Either run this installer from a folder that contains the Tools directory, or
+publish the runtime once with:
+
+    .\Publish-Release.ps1 -Version <version> -IncludeRuntime
+"@
+        }
+
+        Write-Step 'Downloading FFmpeg runtime (about 116 MB, one time)...'
+        $runtimeZip = Join-Path $env:TEMP ('CreatorFlow-runtime-' + [guid]::NewGuid().ToString('N') + '.zip')
+        try {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            $client = [Net.WebClient]::new()
+            try {
+                $client.Headers.Add('User-Agent', 'CreatorFlow-Installer')
+                $client.DownloadFile([uri]$runtimeUrl, $runtimeZip)
+            }
+            finally { $client.Dispose() }
+
+            Write-Step 'Extracting runtime...'
+            New-Item -ItemType Directory -Path $targetTools -Force | Out-Null
+            Add-Type -AssemblyName System.IO.Compression.FileSystem
+            [IO.Compression.ZipFile]::ExtractToDirectory($runtimeZip, $targetTools)
+
+            if (-not (Test-Path -LiteralPath (Join-Path $targetTools $ffmpegProbe) -PathType Leaf)) {
+                throw 'The downloaded runtime did not contain ffmpeg.exe where it was expected.'
+            }
+        }
+        catch {
+            throw "The FFmpeg runtime could not be downloaded from $runtimeUrl. $($_.Exception.Message)"
+        }
+        finally {
+            if (Test-Path -LiteralPath $runtimeZip -PathType Leaf) {
+                Remove-Item -LiteralPath $runtimeZip -Force -ErrorAction SilentlyContinue
+            }
+        }
     }
 
     # Shortcuts. WScript.Shell is present on every Windows install.

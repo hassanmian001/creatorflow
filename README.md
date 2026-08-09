@@ -135,18 +135,35 @@ Add/Remove Programs. No administrator rights are needed at any point.
    $env:GITHUB_TOKEN = 'ghp_yourtokenhere'
    ```
 
-### Installing on a computer
+### Publishing the runtime, once
 
-Copy the folder over and run:
+Before any computer can be set up over the internet, publish FFmpeg once:
 
 ```powershell
-powershell.exe -ExecutionPolicy Bypass -File .\Install.ps1
+.\Publish-Release.ps1 -Version 1.0.0 -IncludeRuntime
 ```
 
-That copies the application to `%LOCALAPPDATA%\Programs\CreatorFlow`, creates Start
-Menu and desktop shortcuts, and registers the Add/Remove Programs entry. The FFmpeg
-runtime is copied only when the target does not already have one, so reinstalling is
-quick and never disturbs an existing copy.
+That packs `Tools` to about 116 MB and uploads it under its own permanent tag,
+`runtime-7.1.1`. It has its own tag rather than riding along with the newest
+release because pointing installers at "latest" would break every fresh install
+the moment an application-only release was published. Repeat it only when FFmpeg
+itself is replaced.
+
+### Installing on a computer
+
+**On a computer with nothing on it**, copy `Setup.bat` across — it is about three
+kilobytes — or download it from the repository, and double-click it. It fetches the
+application and the runtime from GitHub and installs both. Nothing else needs to be
+carried between machines.
+
+**When the whole folder is already there**, double-click `Install.bat` instead. It
+uses the local `Tools` folder and never downloads anything.
+
+Either way the application lands in `%LOCALAPPDATA%\Programs\CreatorFlow` with Start
+Menu and desktop shortcuts and an Add/Remove Programs entry. The runtime is handled
+cheapest-first: an already-installed copy is kept, otherwise one sitting beside the
+installer is copied, otherwise the published one is downloaded. Reinstalling is
+therefore quick and never disturbs an existing FFmpeg.
 
 ### Publishing an update
 

@@ -3,7 +3,8 @@ param(
     [Parameter(Mandatory = $true)][string]$Version,
     [string]$Notes = '',
     [string]$Token = $env:GITHUB_TOKEN,
-    [switch]$ArtifactsOnly
+    [switch]$ArtifactsOnly,
+    [switch]$IncludeRuntime
 )
 
 # Publishes a new CreatorFlow release.
@@ -34,6 +35,7 @@ $appItems = @(
     'SlideshowBatchWorker.ps1',
     'Apply-Update.ps1',
     'Install.ps1',
+    'Install.bat',
     'Uninstall.ps1',
     'Start Tool.bat',
     'VERSION',
@@ -105,6 +107,31 @@ try {
     [IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
     Write-Host "  sha256 $sha"
 
+    # Setup.bat is published on its own so a new computer can be set up by
+    # downloading one small file from the repository.
+    $setupSource = Join-Path $root 'Setup.bat'
+    $setupPath = ''
+    if (Test-Path -LiteralPath $setupSource -PathType Leaf) {
+        $setupPath = Join-Path $outputRoot 'Setup.bat'
+        Copy-Item -LiteralPath $setupSource -Destination $setupPath -Force
+        Write-Host '  staged Setup.bat'
+    }
+
+    # 4b. The runtime, only when asked. It is about 116 MB packed, changes only
+    #     when FFmpeg itself is replaced, and is published under its own fixed
+    #     tag so application releases never disturb it.
+    $runtimePath = ''
+    if ($IncludeRuntime) {
+        $toolsPath = Join-Path $root 'Tools'
+        if (-not (Test-Path -LiteralPath $toolsPath -PathType Container)) {
+            throw 'The Tools folder is missing, so the runtime cannot be packaged.'
+        }
+        Write-Host '  packing FFmpeg runtime (this takes about half a minute)...'
+        $runtimePath = Join-Path $outputRoot 'CreatorFlow-runtime.zip'
+        [IO.Compression.ZipFile]::CreateFromDirectory($toolsPath, $runtimePath, [IO.Compression.CompressionLevel]::Optimal, $false)
+        Write-Host ('  built CreatorFlow-runtime.zip ({0:N1} MB)' -f ((Get-Item -LiteralPath $runtimePath).Length / 1MB))
+    }
+
     if ($ArtifactsOnly) {
         Write-Host ''
         Write-Host "Artifacts are in $outputRoot" -ForegroundColor Green
@@ -148,15 +175,50 @@ to a release tagged v$parsed by hand.
     }
 
     $uploadRoot = ($release.upload_url -replace '\{.*$', '')
-    foreach ($asset in @(
-        @{ Path = $archivePath;  Name = 'CreatorFlow-app.zip'; Type = 'application/zip' },
-        @{ Path = $manifestPath; Name = 'update.json';         Type = 'application/json' }
-    )) {
-        Write-Host "  uploading $($asset.Name)..."
-        $bytes = [IO.File]::ReadAllBytes($asset.Path)
+
+    function Send-ReleaseAsset {
+        param([string]$UploadUrl, [string]$Path, [string]$Name, [string]$ContentType)
+        $sizeText = '{0:N1} MB' -f ((Get-Item -LiteralPath $Path).Length / 1MB)
+        Write-Host "  uploading $Name ($sizeText)..."
+        $bytes = [IO.File]::ReadAllBytes($Path)
         $assetHeaders = $headers.Clone()
-        $assetHeaders['Content-Type'] = $asset.Type
-        [void](Invoke-RestMethod -Method Post -Uri "$uploadRoot`?name=$($asset.Name)" -Headers $assetHeaders -Body $bytes)
+        $assetHeaders['Content-Type'] = $ContentType
+        # A 116 MB upload needs far longer than the default timeout allows.
+        [void](Invoke-RestMethod -Method Post -Uri "$UploadUrl`?name=$Name" -Headers $assetHeaders -Body $bytes -TimeoutSec 1800)
+    }
+
+    Send-ReleaseAsset $uploadRoot $archivePath 'CreatorFlow-app.zip' 'application/zip'
+    Send-ReleaseAsset $uploadRoot $manifestPath 'update.json' 'application/json'
+    if ($setupPath) { Send-ReleaseAsset $uploadRoot $setupPath 'Setup.bat' 'text/plain' }
+
+    # The runtime goes to its own permanent release so that publishing an
+    # application update never removes it from where installers look.
+    if ($runtimePath) {
+        $runtimeTag = 'runtime-7.1.1'
+        try {
+            $existing = Invoke-RestMethod -Method Get -Uri "https://api.github.com/repos/$owner/$repo/releases/tags/$runtimeTag" -Headers $headers
+            Write-Host "  runtime release $runtimeTag already exists"
+            $hasAsset = @($existing.assets | Where-Object { $_.name -eq 'CreatorFlow-runtime.zip' }).Count -gt 0
+            if ($hasAsset) {
+                Write-Host '  runtime asset already published, leaving it alone'
+            }
+            else {
+                Send-ReleaseAsset ($existing.upload_url -replace '\{.*$', '') $runtimePath 'CreatorFlow-runtime.zip' 'application/zip'
+            }
+        }
+        catch {
+            Write-Host "  creating runtime release $runtimeTag..."
+            $runtimeBody = @{
+                tag_name = $runtimeTag
+                name = 'FFmpeg runtime 7.1.1'
+                body = 'Shared FFmpeg runtime used by every CreatorFlow installation. Published once; application releases do not replace it.'
+                draft = $false
+                prerelease = $false
+            } | ConvertTo-Json
+            $runtimeRelease = Invoke-RestMethod -Method Post -Uri "https://api.github.com/repos/$owner/$repo/releases" `
+                -Headers $headers -Body $runtimeBody -ContentType 'application/json'
+            Send-ReleaseAsset ($runtimeRelease.upload_url -replace '\{.*$', '') $runtimePath 'CreatorFlow-runtime.zip' 'application/zip'
+        }
     }
 
     Write-Host ''
