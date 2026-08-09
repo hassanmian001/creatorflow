@@ -3626,6 +3626,9 @@ Update-CaptionControlLabels
 Apply-LiveCaptionStyle
 $script:AppVersion = Get-AppVersion -AppRoot $script:AppRoot
 $AppSubtitleText.Text = "Slideshow automation studio  ·  v$($script:AppVersion)"
+# Also in the title bar and taskbar, so the running version is identifiable
+# without opening anything.
+$window.Title = "CreatorFlow $($script:AppVersion)"
 $script:UpdateCheckState = $null
 $script:UpdateTimer = $null
 $script:PendingUpdate = $null
