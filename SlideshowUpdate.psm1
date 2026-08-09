@@ -5,7 +5,7 @@ Set-StrictMode -Version Latest
 # Fill in the GitHub account and repository that holds the releases, then
 # publish with Publish-Release.ps1. While the owner is left blank the whole
 # update system stays quiet: no checks, no errors, no prompts.
-$script:UpdateOwner = ''
+$script:UpdateOwner = 'hassanmian001'
 $script:UpdateRepo = 'creatorflow'
 
 # GitHub serves the newest release's assets from a fixed address, so a released
