@@ -1,0 +1,23 @@
+# The FFmpeg runtime. ffmpeg.exe alone is 141 MB, and GitHub rejects any file
+# over 100 MB, so committing this folder makes the push fail outright. It is
+# also deliberately left out of update archives, because it does not change
+# between releases and every installation already has a copy.
+Tools/
+
+# Build output from Publish-Release.ps1.
+dist/
+
+# Never commit a token. Publish-Release.ps1 reads it from $env:GITHUB_TOKEN.
+*.token
+.env
+secrets.json
+
+# Local-only version marker, if one is ever used to pin a machine.
+VERSION.local
+
+# Editor and OS noise.
+.vs/
+.vscode/
+*.user
+Thumbs.db
+desktop.ini
