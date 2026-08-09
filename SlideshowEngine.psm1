@@ -316,23 +316,31 @@ function Get-OptionalPropertyValue {
 function Get-PanOffsetExpressions {
     param(
         [string]$PanDirection,
-        [string]$ProgressExpression,
         [string]$HorizontalMargin,
         [string]$VerticalMargin,
         [double]$DriftFraction = 0.5
     )
 
-    # The crop offset drifts from -DriftFraction to +DriftFraction of the margin
-    # the zoom itself creates. Scaling by that margin means the crop window can
-    # never leave the source image at any zoom level, so no clamping is needed,
-    # and the drift tapers to nothing at the un-zoomed end of the move.
-    $driftText = Format-InvariantNumber $DriftFraction
-    $signedDrift = "($driftText*(2*$ProgressExpression-1))"
+    # The crop sits at a fixed fraction off centre, and the zoom carries it
+    # there. Because the margin only ever grows or shrinks with the zoom, and
+    # this multiplier is constant, the crop travels in one direction for the
+    # whole clip.
+    #
+    # An earlier version scaled the offset by a factor that ran from 1.5 down to
+    # 0.5 across the clip. Multiplied by a margin growing from nothing, the
+    # result peaked around two thirds through and then travelled backwards, and
+    # near that turning point the crop landed on the same whole pixel for three
+    # quarters of a second before jumping. On screen that is a pan that slows to
+    # a halt, twitches, and reverses.
+    #
+    # DriftFraction stays at or below 1 so the window cannot leave the image:
+    # the offset is valid anywhere between 0 and twice the centred margin.
+    $driftText = Format-InvariantNumber ([Math]::Max(0.0, [Math]::Min(1.0, $DriftFraction)))
     switch ($PanDirection) {
-        'Left'  { return [pscustomobject]@{ X = "$HorizontalMargin*(1-$signedDrift)"; Y = $VerticalMargin } }
-        'Right' { return [pscustomobject]@{ X = "$HorizontalMargin*(1+$signedDrift)"; Y = $VerticalMargin } }
-        'Up'    { return [pscustomobject]@{ X = $HorizontalMargin; Y = "$VerticalMargin*(1-$signedDrift)" } }
-        'Down'  { return [pscustomobject]@{ X = $HorizontalMargin; Y = "$VerticalMargin*(1+$signedDrift)" } }
+        'Left'  { return [pscustomobject]@{ X = "$HorizontalMargin*(1-$driftText)"; Y = $VerticalMargin } }
+        'Right' { return [pscustomobject]@{ X = "$HorizontalMargin*(1+$driftText)"; Y = $VerticalMargin } }
+        'Up'    { return [pscustomobject]@{ X = $HorizontalMargin; Y = "$VerticalMargin*(1-$driftText)" } }
+        'Down'  { return [pscustomobject]@{ X = $HorizontalMargin; Y = "$VerticalMargin*(1+$driftText)" } }
         default { return [pscustomobject]@{ X = $HorizontalMargin; Y = $VerticalMargin } }
     }
 }
@@ -650,7 +658,7 @@ function New-FilterGraph {
         # constant rate for the same reason the zoom does, so it never
         # decelerates into zoompan's whole-pixel crop rounding.
         $panDirection = [string](Get-OptionalPropertyValue -Object $item -Name 'PanDirection' -DefaultValue 'None')
-        $pan = Get-PanOffsetExpressions -PanDirection $panDirection -ProgressExpression $linearProgress -HorizontalMargin '((iw-iw/zoom)/2)' -VerticalMargin '((ih-ih/zoom)/2)'
+        $pan = Get-PanOffsetExpressions -PanDirection $panDirection -HorizontalMargin '((iw-iw/zoom)/2)' -VerticalMargin '((ih-ih/zoom)/2)'
         $xExpression = $pan.X
         $yExpression = $pan.Y
 
@@ -818,7 +826,7 @@ function New-VulkanFilterGraph {
         # Match the CPU renderer's drift so GPU previews and final renders move
         # the same way.
         $panDirection = [string](Get-OptionalPropertyValue -Object $item -Name 'PanDirection' -DefaultValue 'None')
-        $pan = Get-PanOffsetExpressions -PanDirection $panDirection -ProgressExpression $linearProgress -HorizontalMargin '((iw-cw)/2)' -VerticalMargin '((ih-ch)/2)'
+        $pan = Get-PanOffsetExpressions -PanDirection $panDirection -HorizontalMargin '((iw-cw)/2)' -VerticalMargin '((ih-ch)/2)'
         $cropXExpression = $pan.X
         $cropYExpression = $pan.Y
         # Normalize the still image's default 25 FPS before looping. Doing fps

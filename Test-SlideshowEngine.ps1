@@ -75,8 +75,15 @@ foreach ($duration in $durations) {
         Assert-True ($graph.FilterText -match '\(\(ih-ih/zoom\)/2\)') 'CPU vertical crop offset is anchored to the zoom margin'
         Assert-True ($gpuGraph.FilterText -match '\(\(iw-cw\)/2\)') 'Vulkan crop offset is anchored to the zoom margin'
         Assert-True ($gpuGraph.FilterText -match '\(\(ih-ch\)/2\)') 'Vulkan vertical crop offset is anchored to the zoom margin'
-        Assert-True ($graph.FilterText -match '0\.5\*\(2\*') 'CPU zoom applies the pan drift term'
-        Assert-True ($gpuGraph.FilterText -match '0\.5\*\(2\*') 'Vulkan zoom applies the pan drift term'
+        Assert-True ($graph.FilterText -match '\*\(1[-+]0\.5\)') 'CPU zoom applies the pan offset'
+        Assert-True ($gpuGraph.FilterText -match '\*\(1[-+]0\.5\)') 'Vulkan zoom applies the pan offset'
+        # The offset multiplier has to stay constant across the clip. When it
+        # varied with progress it cancelled against the growing zoom margin,
+        # so the pan stalled for three quarters of a second and then reversed.
+        Assert-True (-not ($graph.FilterText -match "x='[^']*2\*min")) 'CPU pan offset does not vary with progress'
+        Assert-True (-not ($graph.FilterText -match "y='[^']*2\*min")) 'CPU vertical pan offset does not vary with progress'
+        Assert-True (-not ($gpuGraph.FilterText -match "crop_x='[^']*2\*min")) 'Vulkan pan offset does not vary with progress'
+        Assert-True (-not ($gpuGraph.FilterText -match "crop_y='[^']*2\*min")) 'Vulkan vertical pan offset does not vary with progress'
         Assert-True ($gpuGraph.FilterText -match 'peak_detect=0') 'Vulkan path skips unnecessary HDR analysis'
         Assert-True ($gpuGraph.FilterText -match 'fps=48,loop=') 'Vulkan zoom is generated at twice the delivery frame rate'
         Assert-True ($gpuGraph.FilterText -match "tmix=frames=3:weights='1 2 1'") 'Vulkan zoom receives subtle temporal motion blur'
