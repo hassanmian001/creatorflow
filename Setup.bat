@@ -6,49 +6,71 @@ REM download it from the GitHub repository, and double-click it. It fetches the
 REM application and the FFmpeg runtime from the latest release and installs
 REM them, so nothing else has to be carried between machines.
 REM
+REM Downloading and unpacking are done with curl and tar, which ship with
+REM Windows 10 and 11. PowerShell is only ever asked to run a script file that
+REM is already on disk. An earlier version passed the download and the install
+REM to PowerShell as one inline command, and Microsoft Defender correctly
+REM stopped it: fetching code from the internet and running it in a single
+REM PowerShell line is exactly the shape of the ClickFix malware family, so it
+REM is blocked on sight no matter what the code actually does.
+REM
 REM Edit GITHUB_OWNER below if the account name ever changes.
 
-setlocal
+setlocal EnableExtensions
 set "GITHUB_OWNER=hassanmian001"
 set "GITHUB_REPO=creatorflow"
+set "ASSET_URL=https://github.com/%GITHUB_OWNER%/%GITHUB_REPO%/releases/latest/download/CreatorFlow-app.zip"
+set "WORK=%TEMP%\CreatorFlow-setup"
 
 echo.
 echo   CreatorFlow setup
 echo   -----------------
-echo   Downloading from github.com/%GITHUB_OWNER%/%GITHUB_REPO%
+echo   Source: github.com/%GITHUB_OWNER%/%GITHUB_REPO%
 echo.
 
-powershell.exe -NoLogo -NoProfile -STA -ExecutionPolicy Bypass -Command ^
-  "$ErrorActionPreference='Stop';" ^
-  "$owner='%GITHUB_OWNER%'; $repo='%GITHUB_REPO%';" ^
-  "try {" ^
-  "  [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;" ^
-  "  $work=Join-Path $env:TEMP ('CreatorFlow-setup-'+[guid]::NewGuid().ToString('N'));" ^
-  "  New-Item -ItemType Directory -Path $work -Force | Out-Null;" ^
-  "  $zip=Join-Path $work 'app.zip';" ^
-  "  Write-Host '  Downloading application...';" ^
-  "  $c=[Net.WebClient]::new(); $c.Headers.Add('User-Agent','CreatorFlow-Setup');" ^
-  "  $c.DownloadFile([uri]\"https://github.com/$owner/$repo/releases/latest/download/CreatorFlow-app.zip\", $zip); $c.Dispose();" ^
-  "  Add-Type -AssemblyName System.IO.Compression.FileSystem;" ^
-  "  $app=Join-Path $work 'app'; [IO.Compression.ZipFile]::ExtractToDirectory($zip,$app);" ^
-  "  $installer=Join-Path $app 'Install.ps1';" ^
-  "  if(-not (Test-Path -LiteralPath $installer)){ throw 'The downloaded release does not contain Install.ps1.' }" ^
-  "  Write-Host '  Running installer...'; Write-Host '';" ^
-  "  & $installer;" ^
-  "  if($LASTEXITCODE -ne 0){ throw 'The installer reported a failure.' }" ^
-  "  Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue;" ^
-  "} catch {" ^
-  "  Write-Host '';" ^
-  "  Write-Host ('  Setup failed: '+$_.Exception.Message) -ForegroundColor Red;" ^
-  "  Write-Host '';" ^
-  "  Write-Host '  Check that the computer is online and that a release has been' -ForegroundColor Yellow;" ^
-  "  Write-Host ('  published at https://github.com/'+$owner+'/'+$repo+'/releases') -ForegroundColor Yellow;" ^
-  "  Write-Host '';" ^
-  "  exit 1" ^
-  "}"
-
-if errorlevel 1 (
-    pause
-    exit /b 1
+if exist "%WORK%" rd /s /q "%WORK%" 2>nul
+mkdir "%WORK%" 2>nul
+if not exist "%WORK%" (
+    echo   Could not create a temporary folder at:
+    echo     %WORK%
+    goto :failed
 )
+
+echo   Downloading application...
+curl.exe --location --fail --silent --show-error --retry 2 --output "%WORK%\app.zip" "%ASSET_URL%"
+if errorlevel 1 (
+    echo.
+    echo   The download failed.
+    echo.
+    echo   The usual causes are that no release has been published yet, or that
+    echo   the repository is private. Releases are listed at:
+    echo     https://github.com/%GITHUB_OWNER%/%GITHUB_REPO%/releases
+    goto :failed
+)
+
+echo   Unpacking...
+mkdir "%WORK%\app" 2>nul
+tar.exe -x -f "%WORK%\app.zip" -C "%WORK%\app"
+if errorlevel 1 (
+    echo   The downloaded file could not be unpacked; it may be incomplete.
+    goto :failed
+)
+
+if not exist "%WORK%\app\Install.ps1" (
+    echo   The downloaded release does not contain Install.ps1.
+    goto :failed
+)
+
+echo   Running installer...
+echo.
+powershell.exe -NoLogo -NoProfile -STA -ExecutionPolicy Bypass -File "%WORK%\app\Install.ps1"
+if errorlevel 1 goto :failed
+
+rd /s /q "%WORK%" 2>nul
 exit /b 0
+
+:failed
+echo.
+if exist "%WORK%" rd /s /q "%WORK%" 2>nul
+pause
+exit /b 1

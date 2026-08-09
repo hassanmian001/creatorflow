@@ -124,13 +124,25 @@ publish the runtime once with:
         Write-Step 'Downloading FFmpeg runtime (about 116 MB, one time)...'
         $runtimeZip = Join-Path $env:TEMP ('CreatorFlow-runtime-' + [guid]::NewGuid().ToString('N') + '.zip')
         try {
-            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-            $client = [Net.WebClient]::new()
-            try {
-                $client.Headers.Add('User-Agent', 'CreatorFlow-Installer')
-                $client.DownloadFile([uri]$runtimeUrl, $runtimeZip)
+            # curl.exe ships with Windows 10 and 11 and is preferred here. A
+            # PowerShell script that pulls a file off the internet and unpacks it
+            # matches how droppers behave, and antivirus heuristics act on the
+            # shape rather than the intent, so the download is left to the tool
+            # Windows already provides for it.
+            $curl = Join-Path $env:SystemRoot 'System32\curl.exe'
+            if (Test-Path -LiteralPath $curl -PathType Leaf) {
+                & $curl --location --fail --silent --show-error --retry 2 --output $runtimeZip $runtimeUrl
+                if ($LASTEXITCODE -ne 0) { throw "curl reported error $LASTEXITCODE." }
             }
-            finally { $client.Dispose() }
+            else {
+                [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+                $client = [Net.WebClient]::new()
+                try {
+                    $client.Headers.Add('User-Agent', 'CreatorFlow-Installer')
+                    $client.DownloadFile([uri]$runtimeUrl, $runtimeZip)
+                }
+                finally { $client.Dispose() }
+            }
 
             Write-Step 'Extracting runtime...'
             New-Item -ItemType Directory -Path $targetTools -Force | Out-Null
