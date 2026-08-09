@@ -1080,16 +1080,21 @@ function Select-AvailableEncoder {
     $StatusText.Text = 'Checking compatible NVIDIA NVENC and GPU effects...'
     $window.Dispatcher.Invoke([action]{}, [Windows.Threading.DispatcherPriority]::Background)
     if ((Test-VideoEncoder 'h264_nvenc')) {
-        if (Test-Path -LiteralPath $script:ScreenKernelPath -PathType Leaf) {
-            $script:OpenClDevice = Find-NvidiaOpenClDevice
-        }
+        # The OpenCL compositor is deliberately left switched off. Compositing
+        # the watermark on the GPU repeats frames: rendering the same timeline
+        # twice, changing nothing but the compositor, gave 0 repeated frames out
+        # of 382 through the CPU blend and 103 through OpenCL, dropping the
+        # motion from a true 24 FPS to about 17. On a slow pan that reads as
+        # juddering and dragging. Aligning the timestamps of the two OpenCL
+        # inputs recovered only 8 of those frames, so the fault is not simply a
+        # mismatch this code can correct.
+        #
+        # Only the watermark and caption compositing moved to the GPU, and that
+        # stage was never the slow part, so the cost of doing it on the CPU is
+        # small next to producing a video that actually animates smoothly.
+        $script:OpenClDevice = $null
         $script:SelectedEncoder = 'h264_nvenc'
-        if ($null -ne $script:OpenClDevice) {
-            $EncoderText.Text = 'NVIDIA NVENC + GPU effects'
-        }
-        else {
-            $EncoderText.Text = 'NVIDIA NVENC - CPU effects fallback'
-        }
+        $EncoderText.Text = 'NVIDIA NVENC hardware encoding'
         return $script:SelectedEncoder
     }
 
