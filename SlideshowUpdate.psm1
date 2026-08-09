@@ -26,6 +26,69 @@ $script:UpdatePackageName = 'CreatorFlow-app.zip'
 $script:UpdateRuntimeName = 'CreatorFlow-runtime.zip'
 $script:UpdateRuntimeTag = 'runtime-7.1.1'
 
+function Get-CurlPath {
+    $curl = Join-Path $env:SystemRoot 'System32\curl.exe'
+    if (Test-Path -LiteralPath $curl -PathType Leaf) { return $curl }
+    return ''
+}
+
+function Receive-UpdateText {
+    <#
+        Fetches a small document and returns it as text, or '' on any failure.
+
+        WebClient's task-returning methods hand their completion back through
+        the captured SynchronizationContext. On the window's own thread that is
+        the dispatcher, so waiting on the task blocks the very thread the
+        completion needs, and the call never returns. curl is a separate
+        process and has no such relationship with the caller.
+    #>
+    param([string]$Url, [int]$TimeoutSeconds = 15)
+
+    $curl = Get-CurlPath
+    if ($curl) {
+        try {
+            $text = & $curl --location --fail --silent --max-time $TimeoutSeconds $Url
+            if ($LASTEXITCODE -eq 0 -and $text) { return ($text -join "`n") }
+            return ''
+        }
+        catch { return '' }
+    }
+
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        $client = [Net.WebClient]::new()
+        try {
+            $client.Headers.Add('User-Agent', 'CreatorFlow-Updater')
+            # DownloadString, not DownloadStringTaskAsync: the synchronous call
+            # simply blocks and cannot deadlock against the dispatcher.
+            return $client.DownloadString($Url)
+        }
+        finally { $client.Dispose() }
+    }
+    catch { return '' }
+}
+
+function Receive-UpdateFile {
+    param([string]$Url, [string]$Destination, [int]$TimeoutSeconds = 600)
+
+    $curl = Get-CurlPath
+    if ($curl) {
+        & $curl --location --fail --silent --show-error --retry 2 --max-time $TimeoutSeconds --output $Destination $Url
+        if ($LASTEXITCODE -ne 0) {
+            throw "The download failed (curl error $LASTEXITCODE). Check the connection and try again."
+        }
+        return
+    }
+
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    $client = [Net.WebClient]::new()
+    try {
+        $client.Headers.Add('User-Agent', 'CreatorFlow-Updater')
+        $client.DownloadFile($Url, $Destination)
+    }
+    finally { $client.Dispose() }
+}
+
 function Get-AppVersion {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)][string]$AppRoot)
@@ -77,17 +140,7 @@ function Get-AvailableUpdate {
     if (-not (Test-UpdateConfigured)) { return $null }
 
     try {
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        $client = [Net.WebClient]::new()
-        try {
-            $client.Headers.Add('User-Agent', 'CreatorFlow-Updater')
-            $client.Headers.Add('Cache-Control', 'no-cache')
-            $task = $client.DownloadStringTaskAsync([uri](Get-UpdateManifestUrl))
-            if (-not $task.Wait($TimeoutSeconds * 1000)) { return $null }
-            $json = $task.Result
-        }
-        finally { $client.Dispose() }
-
+        $json = Receive-UpdateText -Url (Get-UpdateManifestUrl) -TimeoutSeconds $TimeoutSeconds
         if ([string]::IsNullOrWhiteSpace($json)) { return $null }
         $manifest = $json | ConvertFrom-Json
 
@@ -137,19 +190,12 @@ function Save-UpdatePackage {
     New-Item -ItemType Directory -Path $StagingDirectory -Force | Out-Null
     $archivePath = Join-Path $StagingDirectory 'update.zip'
 
-    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    $client = [Net.WebClient]::new()
     try {
-        $client.Headers.Add('User-Agent', 'CreatorFlow-Updater')
-        $task = $client.DownloadFileTaskAsync([uri]$Update.Url, $archivePath)
-        if (-not $task.Wait($TimeoutSeconds * 1000)) {
-            throw 'The update download timed out. Check the connection and try again.'
-        }
+        Receive-UpdateFile -Url $Update.Url -Destination $archivePath -TimeoutSeconds $TimeoutSeconds
     }
     catch {
         throw "The update could not be downloaded. $($_.Exception.Message)"
     }
-    finally { $client.Dispose() }
 
     if (-not (Test-Path -LiteralPath $archivePath -PathType Leaf)) {
         throw 'The update download did not produce a file.'
