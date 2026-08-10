@@ -85,7 +85,25 @@ foreach ($duration in $durations) {
         Assert-True (-not ($gpuGraph.FilterText -match "crop_x='[^']*2\*min")) 'Vulkan pan offset does not vary with progress'
         Assert-True (-not ($gpuGraph.FilterText -match "crop_y='[^']*2\*min")) 'Vulkan vertical pan offset does not vary with progress'
         Assert-True ($gpuGraph.FilterText -match 'peak_detect=0') 'Vulkan path skips unnecessary HDR analysis'
-        Assert-True ($gpuGraph.FilterText -match 'fps=48,loop=') 'Vulkan zoom is generated at twice the delivery frame rate'
+        Assert-True ($gpuGraph.FilterText -match 'fps=48,format=nv12,hwupload,loop=') 'Vulkan zoom is generated at twice the delivery frame rate, from a single upload'
+        # A still image looped after the upload is sent to the card once. Looped
+        # before it, the same canvas crossed the bus 48 times a second.
+        Assert-True (-not ($gpuGraph.FilterText -match 'loop=loop=\d+:size=1:start=0,trim=end_frame=\d+,setpts=PTS-STARTPTS,format=nv12,hwupload')) 'Vulkan path does not re-upload the same still frame every frame'
+        # The crop is computed on real numbers here, so this canvas exists only
+        # to keep the most magnified crop from being an upscale. 2400x1350
+        # divided by the 1.1 zoom ceiling still exceeds 1920x1080.
+        Assert-True ($gpuGraph.FilterText -match 'scale=2400:1350') 'Vulkan path prepares enough overscan to avoid upscaling at maximum zoom'
+        Assert-True (-not ($gpuGraph.FilterText -match 'scale=3840:2160')) 'Vulkan path does not carry the CPU renderer''s oversized canvas'
+
+        $gpuSoftwareOut = New-VulkanFilterGraph `
+            -Timeline $plan `
+            -RenderFrames $previewFrames `
+            -ZoomMaximumPercent 110 `
+            -BlurAmount 40 `
+            -BackgroundBrightnessPercent 65 `
+            -HardwareOutputFrames $false
+        Assert-True ($gpuSoftwareOut.FilterText -match '\[composited\]null\[vout\]') 'Vulkan filtering can hand finished frames to a non-Vulkan encoder'
+        Assert-True ($gpuGraph.FilterText -match '\[composited\]format=nv12,hwupload\[vout\]') 'Vulkan encoder still receives hardware frames'
         Assert-True ($gpuGraph.FilterText -match "tmix=frames=3:weights='1 2 1'") 'Vulkan zoom receives subtle temporal motion blur'
         Assert-True (-not ($gpuGraph.FilterText -match 'zoompan=')) 'Vulkan path avoids CPU zoompan'
         Assert-True (-not $gpuGraph.FilterText.TrimEnd().EndsWith(';')) 'Vulkan graph has no empty trailing chain'

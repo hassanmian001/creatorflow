@@ -40,7 +40,7 @@ function Get-FfmpegSeconds {
     return 0.0
 }
 
-function Get-LoudnessFilter {
+function Start-LoudnessAnalysis {
     # YouTube plays everything back at roughly -14 LUFS, and it only turns loud
     # uploads down: a quiet one is never raised. Normalising here keeps the
     # channel level with everything beside it in the sidebar.
@@ -50,8 +50,14 @@ function Get-LoudnessFilter {
     # makes speech breathe audibly; with measured values it applies one constant
     # gain instead. If the analysis fails for any reason, the single pass is
     # still far better than leaving the audio 11 dB down, so fall back to it.
+    #
+    # The measurement is started before the first segment renders and collected
+    # once the last one finishes. It has to decode the whole voiceover, and
+    # doing that after the video was finished left the machine idle on a single
+    # core for that whole time with nothing else to do.
     param(
         [string]$AudioPath,
+        [string]$ReportPath,
         [double]$TargetLufs = -14.0,
         [double]$TruePeak = -1.5,
         [double]$Range = 11.0
@@ -62,36 +68,54 @@ function Get-LoudnessFilter {
     $peak = $TruePeak.ToString('0.##', $culture)
     $range = $Range.ToString('0.##', $culture)
     $singlePass = "loudnorm=I=$target`:TP=$peak`:LRA=$range"
+    $analysis = [pscustomobject]@{
+        Process = $null
+        ReportPath = $ReportPath
+        SinglePass = $singlePass
+    }
 
-    $process = $null
     try {
+        if ([string]::IsNullOrWhiteSpace($AudioPath) -or -not (Test-Path -LiteralPath $AudioPath -PathType Leaf)) {
+            return $analysis
+        }
+        if (Test-Path -LiteralPath $ReportPath -PathType Leaf) { Remove-Item -LiteralPath $ReportPath -Force }
         # -vn keeps this to the audio stream. The voiceover is normally an M4A,
         # but measuring a file that also carries video would otherwise decode
-        # every frame just to read its loudness.
+        # every frame just to read its loudness. One thread is plenty and keeps
+        # the measurement out of the render lanes' way.
         $arguments = @(
-            '-hide_banner', '-nostats', '-vn', '-i', $AudioPath,
+            '-hide_banner', '-nostats', '-threads', '1', '-vn', '-i', $AudioPath,
             '-af', "$singlePass`:print_format=json", '-f', 'null', '-'
         )
-        $startInfo = [Diagnostics.ProcessStartInfo]::new()
-        $startInfo.FileName = [string]$script:Job.FfmpegPath
-        $startInfo.Arguments = Join-Arguments $arguments
-        $startInfo.UseShellExecute = $false
-        $startInfo.CreateNoWindow = $true
-        $startInfo.RedirectStandardOutput = $true
-        $startInfo.RedirectStandardError = $true
-        $process = [Diagnostics.Process]::new()
-        $process.StartInfo = $startInfo
-        if (-not $process.Start()) { return $singlePass }
-        [void]$process.StandardOutput.ReadToEnd()
-        $measured = $process.StandardError.ReadToEnd()
+        $analysis.Process = Start-Process -FilePath ([string]$script:Job.FfmpegPath) -ArgumentList (Join-Arguments $arguments) -PassThru -WindowStyle Hidden -RedirectStandardError $ReportPath
+        $null = $analysis.Process.Handle
+    }
+    catch {
+        $analysis.Process = $null
+    }
+    return $analysis
+}
+
+function Complete-LoudnessFilter {
+    param([psobject]$Analysis)
+
+    $singlePass = [string]$Analysis.SinglePass
+    $process = $Analysis.Process
+    if ($null -eq $process) { return $singlePass }
+
+    try {
         $process.WaitForExit()
+        $process.Refresh()
         if ($process.ExitCode -ne 0) { return $singlePass }
+        if (-not (Test-Path -LiteralPath ([string]$Analysis.ReportPath) -PathType Leaf)) { return $singlePass }
+        $measured = Get-Content -LiteralPath ([string]$Analysis.ReportPath) -Raw -ErrorAction Stop
 
         # loudnorm prints its JSON report as the last block on stderr.
         $match = [regex]::Match($measured, '(?s)\{[^{}]*"input_i".*?\}')
         if (-not $match.Success) { return $singlePass }
         $report = $match.Value | ConvertFrom-Json
 
+        $culture = [Globalization.CultureInfo]::InvariantCulture
         foreach ($field in @('input_i', 'input_tp', 'input_lra', 'input_thresh', 'target_offset')) {
             $value = [double]0
             if (-not [double]::TryParse([string]$report.$field, [Globalization.NumberStyles]::Float, $culture, [ref]$value)) {
@@ -113,7 +137,7 @@ function Get-LoudnessFilter {
         return $singlePass
     }
     finally {
-        if ($null -ne $process) { $process.Dispose() }
+        try { $process.Dispose() } catch {}
     }
 }
 
@@ -155,6 +179,17 @@ function Invoke-TrackedFfmpeg {
     }
 }
 
+function Test-EncoderSessionFailure {
+    # A hardware encoder refuses to open beyond its concurrent session limit
+    # rather than queueing, so the lane dies immediately instead of running
+    # slowly. GeForce drivers historically allowed only two or three NVENC
+    # sessions at once; AMF and QSV have their own ceilings. The text below is
+    # what each one prints when it runs out.
+    param([string]$Details)
+    if ([string]::IsNullOrWhiteSpace($Details)) { return $false }
+    return ($Details -match '(?i)OpenEncodeSessionEx|incompatible client key|out of memory|NV_ENC_ERR|no capable devices|Error initializing output stream|Cannot load nvEncodeAPI|failed to create encoder|D3D11|session')
+}
+
 function Invoke-ParallelSegmentJobs {
     param(
         [object[]]$Jobs,
@@ -164,11 +199,21 @@ function Invoke-ParallelSegmentJobs {
         [int]$MaximumParallel = 2
     )
     if ($Jobs.Count -eq 0) { return $CompletedFrames }
-    $maximum = [Math]::Max(1, [Math]::Min(2, $MaximumParallel))
+    # Honour the per-machine lane count worked out by the caller. This used to
+    # be clamped to two no matter what was passed in, so a sixteen-core
+    # workstation rendered with the same concurrency as a four-core laptop and
+    # left most of its cores idle for the whole job.
+    $maximum = [Math]::Max(1, $MaximumParallel)
     $pending = [Collections.Generic.Queue[object]]::new()
     foreach ($jobItem in $Jobs) { $pending.Enqueue($jobItem) }
     $active = [Collections.Generic.List[object]]::new()
     $finishedFrames = $CompletedFrames
+    # Lanes that die because the hardware encoder ran out of sessions are
+    # retried at a lower concurrency instead of failing the render. Each
+    # segment gets a limited number of attempts so a genuine, repeatable fault
+    # still surfaces as an error rather than looping forever.
+    $attempts = @{}
+    $maximumAttempts = 3
 
     try {
         while ($pending.Count -gt 0 -or $active.Count -gt 0) {
@@ -192,20 +237,36 @@ function Invoke-ParallelSegmentJobs {
                 if ($entry.Process.HasExited) {
                     $entry.Process.WaitForExit()
                     $entry.Process.Refresh()
-                    if ($entry.Process.ExitCode -ne 0) {
-                        $details = ''
-                        if (Test-Path -LiteralPath ([string]$entry.Definition.ErrorFile) -PathType Leaf) {
-                            $raw = Get-Content -LiteralPath ([string]$entry.Definition.ErrorFile) -Raw -ErrorAction SilentlyContinue
-                            if ($null -ne $raw) { $details = $raw.Trim() }
-                        }
-                        throw "Segment $([int]$entry.Definition.SegmentIndex + 1) failed with FFmpeg code $($entry.Process.ExitCode). $details"
+                    $exitCode = $entry.Process.ExitCode
+                    $segmentNumber = [int]$entry.Definition.SegmentIndex + 1
+                    $details = ''
+                    if ($exitCode -ne 0 -and (Test-Path -LiteralPath ([string]$entry.Definition.ErrorFile) -PathType Leaf)) {
+                        $raw = Get-Content -LiteralPath ([string]$entry.Definition.ErrorFile) -Raw -ErrorAction SilentlyContinue
+                        if ($null -ne $raw) { $details = $raw.Trim() }
                     }
-                    if (-not (Test-Segment -Path ([string]$entry.Definition.SegmentPath) -ExpectedSeconds ([double]$entry.Definition.ExpectedSeconds))) {
-                        throw "Segment $([int]$entry.Definition.SegmentIndex + 1) did not pass validation."
-                    }
-                    $finishedFrames += [int]$entry.Definition.FrameCount
                     $entry.Process.Dispose()
                     $active.RemoveAt($index)
+
+                    if ($exitCode -ne 0) {
+                        $key = [string]$entry.Definition.SegmentIndex
+                        $used = if ($attempts.ContainsKey($key)) { [int]$attempts[$key] } else { 0 }
+                        $used++
+                        $attempts[$key] = $used
+                        # Only back off for the failure that concurrency can
+                        # actually cause. Anything else is a real fault and is
+                        # reported straight away.
+                        if ($maximum -gt 1 -and $used -lt $maximumAttempts -and (Test-EncoderSessionFailure -Details $details)) {
+                            $maximum = [Math]::Max(1, $maximum - 1)
+                            Write-WorkerProgress -Percent ([Math]::Min(94.0, (($finishedFrames + $runningFrames) / [double]$TotalFrames) * 94.0)) -Message "The graphics card refused another simultaneous encode. Continuing with $maximum at a time..."
+                            $pending.Enqueue($entry.Definition)
+                            continue
+                        }
+                        throw "Segment $segmentNumber failed with FFmpeg code $exitCode. $details"
+                    }
+                    if (-not (Test-Segment -Path ([string]$entry.Definition.SegmentPath) -ExpectedSeconds ([double]$entry.Definition.ExpectedSeconds))) {
+                        throw "Segment $segmentNumber did not pass validation."
+                    }
+                    $finishedFrames += [int]$entry.Definition.FrameCount
                 }
                 else {
                     $seconds = Get-FfmpegSeconds ([string]$entry.Definition.ProgressFile)
@@ -322,6 +383,14 @@ try {
     $captionWordsPerLine = if ($script:Job.Settings.PSObject.Properties['CaptionWordsPerLine']) { [int]$script:Job.Settings.CaptionWordsPerLine } else { 8 }
     $useOpenClEffects = ([string]$script:Job.Encoder -eq 'h264_nvenc') -and -not [string]::IsNullOrWhiteSpace($openClDevice) -and (Test-Path -LiteralPath $screenKernelPath -PathType Leaf)
     $maximumParallel = if ($script:Job.PSObject.Properties['ParallelSegments']) { [int]$script:Job.ParallelSegments } else { 2 }
+    if ($maximumParallel -lt 1) { $maximumParallel = 1 }
+    # Divide the machine between the lanes explicitly. Left to itself every
+    # FFmpeg process starts as many filter threads as there are cores, so four
+    # lanes on an eight-core laptop ask for thirty-two threads and spend a
+    # noticeable share of the render context-switching between them.
+    $logicalCores = [Environment]::ProcessorCount
+    if ($logicalCores -lt 1) { $logicalCores = 1 }
+    $threadsPerLane = [Math]::Max(1, [int][Math]::Floor($logicalCores / [double]$maximumParallel))
     for ($segmentIndex = 0; $segmentIndex -lt $segmentCount; $segmentIndex++) {
         $startFrame = $segmentIndex * $segmentFrames
         $frameCount = [Math]::Min($segmentFrames, $totalFrames - $startFrame)
@@ -370,7 +439,7 @@ try {
         $ffProgress = Join-Path $resumeDirectory ('progress-{0:D4}.txt' -f $segmentIndex)
         $ffError = Join-Path $resumeDirectory ('error-{0:D4}.log' -f $segmentIndex)
         $arguments = [Collections.Generic.List[string]]::new()
-        foreach ($value in @('-y','-hide_banner','-loglevel',$ffmpegLogLevel,'-nostats','-progress',$ffProgress)) { $arguments.Add($value) }
+        foreach ($value in @('-y','-hide_banner','-loglevel',$ffmpegLogLevel,'-nostats','-progress',$ffProgress,'-filter_complex_threads',[string]$threadsPerLane)) { $arguments.Add($value) }
         if ($useOpenClEffects) {
             foreach ($value in @('-init_hw_device',"opencl=screencl:$openClDevice",'-filter_hw_device','screencl')) { $arguments.Add($value) }
         }
@@ -391,7 +460,7 @@ try {
         # timestamp plus one frame, so the segment reads one frame short. The
         # concat demuxer then starts the next segment a frame early and the two
         # frames either side of every join land on the same presentation time.
-        foreach ($value in @('-r',[string]$fps,'-frames:v',[string]$frameCount,'-an',$segmentPath)) { $arguments.Add($value) }
+        foreach ($value in @('-threads',[string]$threadsPerLane,'-r',[string]$fps,'-frames:v',[string]$frameCount,'-an',$segmentPath)) { $arguments.Add($value) }
         $segmentJobs.Add([pscustomobject]@{
             Arguments = $arguments.ToArray()
             ProgressFile = $ffProgress
@@ -403,11 +472,13 @@ try {
         })
     }
 
+    $loudnessTarget = if ($script:Job.PSObject.Properties['LoudnessTargetLufs']) { [double]$script:Job.LoudnessTargetLufs } else { -14.0 }
+    $loudnessAnalysis = Start-LoudnessAnalysis -AudioPath ([string]$script:Job.AudioPath) -ReportPath (Join-Path $resumeDirectory 'loudness.json') -TargetLufs $loudnessTarget
+
     $completedFrames = Invoke-ParallelSegmentJobs -Jobs $segmentJobs.ToArray() -CompletedFrames $completedFrames -TotalFrames $totalFrames -Fps $fps -MaximumParallel $maximumParallel
 
     Write-WorkerProgress 95 'Measuring voiceover loudness...'
-    $loudnessTarget = if ($script:Job.PSObject.Properties['LoudnessTargetLufs']) { [double]$script:Job.LoudnessTargetLufs } else { -14.0 }
-    $loudnessFilter = Get-LoudnessFilter -AudioPath ([string]$script:Job.AudioPath) -TargetLufs $loudnessTarget
+    $loudnessFilter = Complete-LoudnessFilter -Analysis $loudnessAnalysis
 
     Write-WorkerProgress 95 'Joining segments and adding the voiceover...'
     $concatPath = Join-Path $resumeDirectory 'segments.txt'

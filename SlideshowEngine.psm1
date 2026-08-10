@@ -722,7 +722,13 @@ function New-VulkanFilterGraph {
         [psobject]$CaptionStyle = $null,
         [string]$OpenClScreenKernelPath = '',
         [int]$Width = 1920,
-        [int]$Height = 1080
+        [int]$Height = 1080,
+
+        # Vulkan's own H.264 encoder needs the finished frames left on the GPU.
+        # Every other encoder - NVENC, AMF, Quick Sync, libx264 - wants ordinary
+        # frames in system memory, and passing $false ends the graph there so
+        # this filter path can be used with any of them.
+        [bool]$HardwareOutputFrames = $true
     )
 
     if ($RenderFrames -le 0 -or $RenderFrames -gt [int]$Timeline.TotalFrames) {
@@ -783,14 +789,27 @@ function New-VulkanFilterGraph {
     # bilinear sampling can shimmer as those edges cross the pixel grid.
     $gpuFastOptions = "upscaler=lanczos:downscaler=lanczos:skip_aa=1:disable_linear=1:peak_detect=0:apply_filmgrain=0"
 
-    # The blurred background and fitted foreground are static, so prepare each
-    # unique image once on the CPU. Animated cropping is then performed by
-    # libplacebo on the selected Vulkan GPU at the final 1920x1080 resolution.
+    # Prepare each unique image with enough overscan that the most magnified
+    # crop still contains a full delivery frame. An earlier version prepared
+    # these at the delivery resolution itself, so a zoom had already discarded
+    # the detail it was about to magnify, and the background blur was applied
+    # to a frame a quarter of the area, making the same sigma look visibly
+    # weaker here than in the final render.
+    #
+    # This deliberately stays well below the CPU renderer's 2x canvas. That
+    # one is oversized to keep zoompan's whole-pixel crop from stepping, and
+    # libplacebo crops on real numbers so it has no such problem. Matching the
+    # 2x canvas was measured at roughly 25 percent slower than this, and it
+    # exhausted the memory of an integrated GPU outright.
+    $workingScale = [Math]::Max(1.25, $zoomMaximum)
+    $workingWidth = [int]([Math]::Ceiling(($Width * $workingScale) / 2.0) * 2)
+    $workingHeight = [int]([Math]::Ceiling(($Height * $workingScale) / 2.0) * 2)
+
     for ($imageIndex = 0; $imageIndex -lt $uniquePaths.Count; $imageIndex++) {
         $inputIndex = $imageIndex + 2
         $filters.Add("[$inputIndex`:v]split=2[bgsrc$imageIndex][fgsrc$imageIndex]")
-        $filters.Add("[bgsrc$imageIndex]scale=$Width`:$Height`:force_original_aspect_ratio=increase:flags=bicubic,crop=$Width`:$Height,gblur=sigma=$blurText,eq=brightness=$brightnessText[bg$imageIndex]")
-        $filters.Add("[fgsrc$imageIndex]scale=$Width`:$Height`:force_original_aspect_ratio=decrease:flags=lanczos[fg$imageIndex]")
+        $filters.Add("[bgsrc$imageIndex]scale=$workingWidth`:$workingHeight`:force_original_aspect_ratio=increase:flags=lanczos+accurate_rnd,crop=$workingWidth`:$workingHeight,gblur=sigma=$blurText,eq=brightness=$brightnessText[bg$imageIndex]")
+        $filters.Add("[fgsrc$imageIndex]scale=$workingWidth`:$workingHeight`:force_original_aspect_ratio=decrease:flags=lanczos+accurate_rnd[fg$imageIndex]")
         $filters.Add("[bg$imageIndex][fg$imageIndex]overlay=(W-w)/2`:(H-h)/2:shortest=1,setsar=1[base$imageIndex]")
 
         $occurrences = $occurrencesByImage[$imageIndex]
@@ -831,6 +850,12 @@ function New-VulkanFilterGraph {
         $cropYExpression = $pan.Y
         # Normalize the still image's default 25 FPS before looping. Doing fps
         # after loop silently removed roughly one frame in every 25.
+        #
+        # The upload happens before the loop, not after it. Looping first meant
+        # sending the same static canvas across to the graphics card 48 times a
+        # second - around 600 MB/s at this canvas size - when one copy is all
+        # the card ever needs. The loop filter hands out references to the
+        # frame already sitting in video memory.
         if ($useOpenClComposite) {
             # libplacebo still performs the animated crop on the selected
             # Vulkan GPU, but returns RGBA frames so the exact Screen equation
@@ -838,7 +863,7 @@ function New-VulkanFilterGraph {
             $filters.Add("[occsrc$itemIndex]fps=$motionFps,loop=loop=$($motionClipFrames - 1)`:size=1`:start=0,trim=end_frame=$motionClipFrames,setpts=PTS-STARTPTS,libplacebo=$gpuFastOptions`:format=rgba`:w=$Width`:h=$Height`:crop_w='iw/($zoomExpression)'`:crop_h='ih/($zoomExpression)'`:crop_x='$cropXExpression'`:crop_y='$cropYExpression',hwdownload,format=rgba,tmix=frames=3:weights='1 2 1',fps=$fps,trim=end_frame=$clipFrames,setpts=PTS-STARTPTS[clip$itemIndex]")
         }
         else {
-            $filters.Add("[occsrc$itemIndex]fps=$motionFps,loop=loop=$($motionClipFrames - 1)`:size=1`:start=0,trim=end_frame=$motionClipFrames,setpts=PTS-STARTPTS,format=nv12,hwupload,libplacebo=$gpuFastOptions`:w=$Width`:h=$Height`:crop_w='iw/($zoomExpression)'`:crop_h='ih/($zoomExpression)'`:crop_x='$cropXExpression'`:crop_y='$cropYExpression',hwdownload,format=nv12,tmix=frames=3:weights='1 2 1',fps=$fps,trim=end_frame=$clipFrames,setpts=PTS-STARTPTS[clip$itemIndex]")
+            $filters.Add("[occsrc$itemIndex]fps=$motionFps,format=nv12,hwupload,loop=loop=$($motionClipFrames - 1)`:size=1`:start=0,trim=end_frame=$motionClipFrames,setpts=PTS-STARTPTS,libplacebo=$gpuFastOptions`:w=$Width`:h=$Height`:crop_w='iw/($zoomExpression)'`:crop_h='ih/($zoomExpression)'`:crop_x='$cropXExpression'`:crop_y='$cropYExpression',hwdownload,format=nv12,tmix=frames=3:weights='1 2 1',fps=$fps,trim=end_frame=$clipFrames,setpts=PTS-STARTPTS[clip$itemIndex]")
         }
     }
 
@@ -870,12 +895,17 @@ function New-VulkanFilterGraph {
         $filters.Add("[1:v]fps=$fps,scale=$Width`:$Height`:flags=bicubic,setsar=1,trim=end_frame=$processingFrames,setpts=PTS-STARTPTS,format=gbrp[watermarkrgb]")
         $filters.Add("[vseqrgb][watermarkrgb]blend=all_mode=screen:shortest=0:repeatlast=1,trim=end_frame=$RenderFrames,setpts=PTS-STARTPTS,format=yuv420p[composited]")
 
+        # Only Vulkan's own encoder wants the result handed back as a hardware
+        # frame. Uploading for anything else would immediately be undone by the
+        # encoder pulling it straight back into system memory.
+        $tail = if ($HardwareOutputFrames) { ',format=nv12,hwupload' } else { '' }
         if ([string]::IsNullOrWhiteSpace($SubtitlePath)) {
-            $filters.Add('[composited]format=nv12,hwupload[vout]')
+            if ($HardwareOutputFrames) { $filters.Add('[composited]format=nv12,hwupload[vout]') }
+            else { $filters.Add('[composited]null[vout]') }
         }
         else {
             $subtitleFilterPath = ConvertTo-FilterPath $SubtitlePath
-            $filters.Add("[composited]subtitles=filename='$subtitleFilterPath':force_style='$captionForceStyle',format=nv12,hwupload[vout]")
+            $filters.Add("[composited]subtitles=filename='$subtitleFilterPath':force_style='$captionForceStyle'$tail[vout]")
         }
     }
 

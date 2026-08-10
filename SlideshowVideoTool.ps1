@@ -1041,19 +1041,77 @@ function Find-NvidiaOpenClDevice {
     return $fallbackDevice
 }
 
+function Test-SimultaneousEncoderSessions {
+    # Hardware encoders cap how many encodes may be open at once and refuse the
+    # extras outright rather than queueing them. GeForce drivers have allowed
+    # anywhere from two to eight NVENC sessions depending on their age, and AMF
+    # and Quick Sync have their own ceilings, so the only portable way to learn
+    # the limit on a given machine is to try it.
+    param([string]$Encoder, [int]$Count)
+    if ($Count -le 1) { return $true }
+
+    $processes = [Collections.Generic.List[object]]::new()
+    try {
+        for ($index = 0; $index -lt $Count; $index++) {
+            # 48 frames is long enough that the probes genuinely overlap; a
+            # single frame can finish before the next process has even started,
+            # which would make any limit look higher than it is.
+            $arguments = @(
+                '-hide_banner', '-loglevel', 'error',
+                '-f', 'lavfi', '-i', 'color=c=black:s=1280x720:r=24',
+                '-frames:v', '48', '-c:v', $Encoder, '-f', 'null', 'NUL'
+            )
+            $startInfo = [Diagnostics.ProcessStartInfo]::new()
+            $startInfo.FileName = $script:FfmpegPath
+            $startInfo.Arguments = Join-ProcessArguments $arguments
+            $startInfo.UseShellExecute = $false
+            $startInfo.CreateNoWindow = $true
+            $startInfo.RedirectStandardOutput = $true
+            $startInfo.RedirectStandardError = $true
+            $process = [Diagnostics.Process]::new()
+            $process.StartInfo = $startInfo
+            if (-not $process.Start()) { return $false }
+            $null = $process.Handle
+            $processes.Add($process)
+        }
+        foreach ($process in $processes) {
+            [void]$process.StandardOutput.ReadToEnd()
+            [void]$process.StandardError.ReadToEnd()
+            $process.WaitForExit()
+            if ($process.ExitCode -ne 0) { return $false }
+        }
+        return $true
+    }
+    catch {
+        return $false
+    }
+    finally {
+        foreach ($process in $processes) {
+            try { if (-not $process.HasExited) { $process.Kill() } } catch {}
+            try { $process.Dispose() } catch {}
+        }
+    }
+}
+
 function Get-RecommendedParallelSegments {
     # How many segments render at once. Each lane runs its own FFmpeg process
     # that scales photographs onto a 2x overscan canvas, so a lane costs both a
     # core and a couple of gigabytes. Deciding this per machine keeps the tool
     # portable: a four-core laptop must not launch the same number of lanes as
     # a workstation, or it thrashes and finishes slower than a single lane.
+    param([string]$Encoder = '')
+
     if ($null -ne $script:RecommendedParallelSegments) {
         return $script:RecommendedParallelSegments
     }
 
     $logicalCores = [Environment]::ProcessorCount
     if ($logicalCores -lt 1) { $logicalCores = 1 }
-    $byCpu = [int][Math]::Floor($logicalCores / 4.0)
+    # A lane is mostly one saturated core running zoompan, which cannot be
+    # threaded, plus part of a second for the threaded scale, blur and encode
+    # around it. Budgeting four cores each was leaving most of a modern machine
+    # idle for the entire render.
+    $byCpu = [int][Math]::Floor($logicalCores / 2.0)
 
     # Assume a modest machine when the memory query is unavailable.
     $totalGb = 8.0
@@ -1062,12 +1120,31 @@ function Get-RecommendedParallelSegments {
         if ($bytes -gt 0) { $totalGb = [double]$bytes / 1GB }
     }
     catch {}
-    # Leave headroom for Windows, the tool itself, and whatever else is open.
-    $byMemory = [int][Math]::Floor(($totalGb - 6.0) / 2.5)
+    # Measured rather than estimated: one lane rendering a 30 second segment
+    # peaked at just over 1.5 GB, and stayed there whether it was given two
+    # filter threads or six. 1.6 covers that.
+    #
+    # The five gigabytes held back are for Windows, this tool, and whatever the
+    # person is doing while they wait. Reserving less looked affordable on a
+    # machine with nothing else running and would have put an eight gigabyte
+    # laptop into swap, which costs far more than the extra lane wins.
+    $byMemory = [int][Math]::Floor(($totalGb - 5.0) / 1.6)
 
     $lanes = [Math]::Min($byCpu, $byMemory)
     if ($lanes -lt 1) { $lanes = 1 }
-    if ($lanes -gt 4) { $lanes = 4 }
+    if ($lanes -gt 6) { $lanes = 6 }
+
+    # Step down to a lane count the encoder will actually grant. Discovering
+    # this here costs a few seconds once; discovering it mid-render costs a
+    # part-finished segment for every step down.
+    if (-not [string]::IsNullOrWhiteSpace($Encoder) -and $Encoder -ne 'libx264' -and $lanes -gt 1) {
+        $StatusText.Text = "Checking how many renders this graphics card allows at once..."
+        $window.Dispatcher.Invoke([action]{}, [Windows.Threading.DispatcherPriority]::Background)
+        while ($lanes -gt 1 -and -not (Test-SimultaneousEncoderSessions -Encoder $Encoder -Count $lanes)) {
+            $lanes--
+        }
+    }
+
     $script:RecommendedParallelSegments = $lanes
     return $lanes
 }
@@ -2191,7 +2268,7 @@ function Start-ResumableFinalRender {
         VulkanDeviceIndex = if ($null -eq $script:VulkanDeviceIndex) { 0 } else { [int]$script:VulkanDeviceIndex }
         OpenClDevice = if ($null -eq $script:OpenClDevice) { '' } else { [string]$script:OpenClDevice }
         ScreenKernelPath = $script:ScreenKernelPath
-        ParallelSegments = Get-RecommendedParallelSegments
+        ParallelSegments = Get-RecommendedParallelSegments -Encoder $Encoder
         SegmentSeconds = 30
         # YouTube plays back at about -14 LUFS and never raises a quiet upload.
         LoudnessTargetLufs = -14.0
@@ -2287,7 +2364,7 @@ function Start-HistoryFinalResume {
     }
     # Concurrency is safe to re-evaluate on resume; it does not change how the
     # completed segments were cut, only how many render at once from here.
-    $lanes = Get-RecommendedParallelSegments
+    $lanes = Get-RecommendedParallelSegments -Encoder $encoder
     if ($job.PSObject.Properties['ParallelSegments']) { $job.ParallelSegments = $lanes }
     else { $job | Add-Member -NotePropertyName ParallelSegments -NotePropertyValue $lanes }
     # Segment length must not change once a job has started. Its completed
@@ -2634,7 +2711,7 @@ function Start-BatchRender {
                 VulkanDeviceIndex = if ($null -eq $script:VulkanDeviceIndex) { 0 } else { [int]$script:VulkanDeviceIndex }
                 OpenClDevice = if ($null -eq $script:OpenClDevice) { '' } else { [string]$script:OpenClDevice }
                 ScreenKernelPath = $script:ScreenKernelPath
-                ParallelSegments = Get-RecommendedParallelSegments
+                ParallelSegments = Get-RecommendedParallelSegments -Encoder $encoder
                 SegmentSeconds = 30
                 LoudnessTargetLufs = -14.0
                 ResumeDirectory = $resumeDirectory

@@ -19,6 +19,10 @@ secrets.json
 # Local-only version marker, if one is ever used to pin a machine.
 VERSION.local
 
+# Timings, generated sample photographs and filter graphs written by
+# Measure-RenderPerformance.ps1. They are specific to the machine that ran it.
+benchmark/
+
 # Editor and OS noise.
 .vs/
 .vscode/
