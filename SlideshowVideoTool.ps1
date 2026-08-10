@@ -351,15 +351,10 @@ $xaml = @'
             <Grid Margin="14,0">
                 <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                    <Border Width="22" Height="22" CornerRadius="5" Margin="0,0,10,0">
-                        <Border.Background>
-                            <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                                <GradientStop Color="#E0913F" Offset="0"/>
-                                <GradientStop Color="#8A5424" Offset="1"/>
-                            </LinearGradientBrush>
-                        </Border.Background>
-                        <TextBlock Text="C" FontWeight="Bold" FontSize="12" Foreground="#1A1206" HorizontalAlignment="Center"/>
-                    </Border>
+                    <!-- Source is set in code so the artwork stays a file on
+                         disk rather than being pasted into the layout. -->
+                    <Image x:Name="AppLogoImage" Width="24" Height="24" Margin="0,0,10,0"
+                           RenderOptions.BitmapScalingMode="HighQuality" SnapsToDevicePixels="True"/>
                     <TextBlock Text="CreatorFlow" FontSize="13.5" FontWeight="SemiBold"/>
                     <TextBlock Text="/" Foreground="#41414A" Margin="9,0"/>
                     <TextBlock x:Name="AppSubtitleText" Text="Slideshow automation studio" Foreground="{StaticResource DimBrush}" FontSize="12.5"/>
@@ -854,7 +849,8 @@ $controlNames = @(
     'CaptionTabTypeButton', 'CaptionTabColourButton', 'CaptionTabPositionButton',
     'CaptionGroupType', 'CaptionGroupColour', 'CaptionGroupPosition',
     # A long render needs a finish time, not a percentage.
-    'ReadinessPanel', 'RenderEtaText', 'RenderDetailText'
+    'ReadinessPanel', 'RenderEtaText', 'RenderDetailText',
+    'AppLogoImage'
 )
 foreach ($name in $controlNames) {
     $control = $window.FindName($name)
@@ -877,6 +873,38 @@ $script:SettingsSections = [ordered]@{
 function New-ToolBrush {
     param([string]$Hex)
     return [Windows.Media.BrushConverter]::new().ConvertFromString($Hex)
+}
+
+$script:AppIconImage = $null
+
+function Get-AppIconImage {
+    # Loaded once and cached. OnLoad caching means the file is not held open,
+    # so an update can replace the artwork while the tool is running.
+    if ($null -ne $script:AppIconImage) { return $script:AppIconImage }
+    foreach ($name in @('CreatorFlow.ico', 'CreatorFlow.png')) {
+        $path = Join-Path $script:AppRoot "Assets\$name"
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+        try {
+            $image = [Windows.Media.Imaging.BitmapImage]::new()
+            $image.BeginInit()
+            $image.UriSource = [Uri]::new($path)
+            $image.CacheOption = [Windows.Media.Imaging.BitmapCacheOption]::OnLoad
+            $image.EndInit()
+            $image.Freeze()
+            $script:AppIconImage = $image
+            return $image
+        }
+        catch {}
+    }
+    return $null
+}
+
+function Set-WindowIcon {
+    param([Windows.Window]$Target)
+    $icon = Get-AppIconImage
+    if ($null -ne $icon -and $null -ne $Target) {
+        try { $Target.Icon = $icon } catch {}
+    }
 }
 
 # The one saturated colour in the window, and the greys it sits on. Kept in one
@@ -2890,6 +2918,7 @@ function Show-CaptionEditor {
         $reader = [Xml.XmlNodeReader]::new([xml]$editorXaml)
         $editor = [Windows.Markup.XamlReader]::Load($reader)
         $editor.Owner = $window
+        Set-WindowIcon -Target $editor
         $grid = $editor.FindName('CaptionGrid')
         $grid.ItemsSource = $entries
         $findText = $editor.FindName('FindText')
@@ -3261,14 +3290,83 @@ function Show-RenderHistory {
         Title="Render History" Width="1050" Height="650" MinWidth="820" MinHeight="500" WindowStartupLocation="CenterOwner"
         Background="#17171A" Foreground="White" FontFamily="Segoe UI">
     <Window.Resources>
-        <Style TargetType="TextBlock"><Setter Property="Foreground" Value="White"/></Style>
-        <Style TargetType="Button"><Setter Property="Background" Value="#26262B"/><Setter Property="Foreground" Value="White"/><Setter Property="BorderBrush" Value="#41414A"/><Setter Property="Padding" Value="12,7"/><Setter Property="Margin" Value="3"/></Style>
+        <!-- The grid was left on the stock Windows theme, which paints light
+             headers, white row separators and a grey selector strip down the
+             left. All of it had to be taken over explicitly. -->
+        <Style TargetType="TextBlock"><Setter Property="Foreground" Value="#E9E9E6"/></Style>
+        <Style TargetType="Button">
+            <Setter Property="Background" Value="#26262B"/><Setter Property="Foreground" Value="#E9E9E6"/>
+            <Setter Property="BorderBrush" Value="#41414A"/><Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="13,7"/><Setter Property="Margin" Value="3"/>
+            <Setter Property="FontSize" Value="12.5"/><Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="B" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="5" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="B" Property="Opacity" Value="0.84"/></Trigger>
+                            <Trigger Property="IsEnabled" Value="False"><Setter TargetName="B" Property="Opacity" Value="0.45"/></Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style TargetType="DataGrid">
+            <Setter Property="Background" Value="#101012"/>
+            <Setter Property="Foreground" Value="#E9E9E6"/>
+            <Setter Property="BorderBrush" Value="#33333A"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="RowBackground" Value="#1A1A1D"/>
+            <Setter Property="AlternatingRowBackground" Value="#151517"/>
+            <Setter Property="HorizontalGridLinesBrush" Value="#26262B"/>
+            <Setter Property="VerticalGridLinesBrush" Value="Transparent"/>
+            <Setter Property="GridLinesVisibility" Value="Horizontal"/>
+            <Setter Property="HeadersVisibility" Value="Column"/>
+            <Setter Property="RowHeight" Value="34"/>
+            <Setter Property="FontSize" Value="12.5"/>
+        </Style>
+        <Style TargetType="DataGridColumnHeader">
+            <Setter Property="Background" Value="#26262B"/>
+            <Setter Property="Foreground" Value="#A3A39E"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Padding" Value="11,9"/>
+            <Setter Property="BorderBrush" Value="#33333A"/>
+            <Setter Property="BorderThickness" Value="0,0,1,1"/>
+            <Setter Property="HorizontalContentAlignment" Value="Left"/>
+        </Style>
+        <Style TargetType="DataGridRow">
+            <Setter Property="Background" Value="#1A1A1D"/>
+            <Setter Property="Foreground" Value="#E9E9E6"/>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="#232327"/></Trigger>
+                <Trigger Property="IsSelected" Value="True"><Setter Property="Background" Value="#2A2119"/></Trigger>
+            </Style.Triggers>
+        </Style>
+        <Style TargetType="DataGridCell">
+            <Setter Property="Foreground" Value="#E9E9E6"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <!-- The stock cell paints the system highlight when selected,
+                         which is a white block in this window. -->
+                    <ControlTemplate TargetType="DataGridCell">
+                        <Border Background="Transparent" Padding="11,0">
+                            <ContentPresenter VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </Window.Resources>
     <Grid Margin="14">
         <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="92"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
         <StackPanel><TextBlock Text="Render History" FontSize="22" FontWeight="SemiBold"/><TextBlock Text="Completed, failed, paused, and resumable production jobs." Foreground="#7E7E7A" Margin="0,4,0,12"/></StackPanel>
         <DataGrid x:Name="HistoryGrid" Grid.Row="1" AutoGenerateColumns="False" CanUserAddRows="False" IsReadOnly="True" SelectionMode="Single"
-                  Background="#101012" Foreground="White" BorderBrush="#33333A" GridLinesVisibility="Horizontal" HorizontalGridLinesBrush="#33333A" AlternatingRowBackground="#1E1E22">
+                  CanUserResizeRows="False" SelectionUnit="FullRow">
             <DataGrid.Columns>
                 <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="95"/>
                 <DataGridTextColumn Header="Type" Binding="{Binding Type}" Width="70"/>
@@ -3291,6 +3389,7 @@ function Show-RenderHistory {
     $reader = [Xml.XmlNodeReader]::new([xml]$historyXaml)
     $historyWindow = [Windows.Markup.XamlReader]::Load($reader)
     $historyWindow.Owner = $window
+    Set-WindowIcon -Target $historyWindow
     $historyWindow.Add_SourceInitialized({ try { $handle = [Windows.Interop.WindowInteropHelper]::new($historyWindow).Handle; $enabled = 1; [void][CreatorFlowWindowTheme]::DwmSetWindowAttribute($handle, 20, [ref]$enabled, 4) } catch {} })
     $grid = $historyWindow.FindName('HistoryGrid')
     $details = $historyWindow.FindName('HistoryDetails')
@@ -3358,7 +3457,53 @@ function Show-BulkQueueBuilder {
     # shared by all queue items, so users can prepare many videos in one pass.
     $queueXaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Build render queue" Width="960" Height="700" MinWidth="760" MinHeight="520" WindowStartupLocation="CenterOwner" Background="#17171A" Foreground="#E9E9E6">
+        Title="Build render queue" Width="960" Height="700" MinWidth="760" MinHeight="520" WindowStartupLocation="CenterOwner"
+        Background="#17171A" Foreground="#E9E9E6" FontFamily="Segoe UI">
+  <Window.Resources>
+    <!-- This window builds most of its controls in code, so these carry no key:
+         an implicit style reaches the boxes and buttons added later too. Without
+         them the text boxes were stock white on a dark window. -->
+    <Style TargetType="TextBlock"><Setter Property="Foreground" Value="#E9E9E6"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
+    <Style TargetType="TextBox">
+      <Setter Property="Background" Value="#101012"/><Setter Property="Foreground" Value="#E9E9E6"/>
+      <Setter Property="CaretBrush" Value="#E0913F"/><Setter Property="SelectionBrush" Value="#8A5424"/>
+      <Setter Property="BorderBrush" Value="#33333A"/><Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="Padding" Value="8,6"/><Setter Property="FontSize" Value="12.5"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="TextBox">
+            <Border x:Name="TB" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="4">
+              <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}" VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="TB" Property="BorderBrush" Value="#E0913F"/></Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style TargetType="Button">
+      <Setter Property="Background" Value="#26262B"/><Setter Property="Foreground" Value="#E9E9E6"/>
+      <Setter Property="BorderBrush" Value="#41414A"/><Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="Padding" Value="13,7"/><Setter Property="Margin" Value="3"/>
+      <Setter Property="FontSize" Value="12.5"/><Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="B" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="5" Padding="{TemplateBinding Padding}">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="B" Property="Opacity" Value="0.84"/></Trigger>
+              <Trigger Property="IsEnabled" Value="False"><Setter TargetName="B" Property="Opacity" Value="0.45"/></Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+  </Window.Resources>
   <Grid Margin="18"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
     <TextBlock Text="Add as many videos as you need, then render them one at a time." FontSize="17" FontWeight="SemiBold"/>
     <Grid Grid.Row="1" Margin="0,14,0,12"><Grid.ColumnDefinitions><ColumnDefinition Width="100"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
@@ -3368,7 +3513,7 @@ function Show-BulkQueueBuilder {
     <Grid Grid.Row="3" Margin="0,14,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
       <Button x:Name="AddVideoButton" Content="+ Add Video" Padding="14,8" Background="#2A2119" BorderBrush="#8A5424"/>
       <Button x:Name="SavedProjectsButton" Grid.Column="2" Content="Render Saved Projects" Padding="14,8" Margin="4,0"/>
-      <Button x:Name="RenderAllButton" Grid.Column="3" Content="Render All" Padding="16,8" Margin="4,0" Background="#8A5424" BorderBrush="#22D3EE" FontWeight="SemiBold"/>
+      <Button x:Name="RenderAllButton" Grid.Column="3" Content="Render All" Padding="16,8" Margin="4,0" Background="#E0913F" BorderBrush="#E0913F" Foreground="#1C1206" FontWeight="SemiBold"/>
     </Grid>
   </Grid>
 </Window>
@@ -3376,6 +3521,7 @@ function Show-BulkQueueBuilder {
     $reader = [Xml.XmlNodeReader]::new([xml]$queueXaml)
     $dialog = [Windows.Markup.XamlReader]::Load($reader)
     $dialog.Owner = $window
+    Set-WindowIcon -Target $dialog
     $watermarkBox = $dialog.FindName('WatermarkText')
     $watermarkBox.Text = $WatermarkText.Text.Trim()
     $rowsPanel = $dialog.FindName('RowsPanel')
@@ -3383,7 +3529,7 @@ function Show-BulkQueueBuilder {
     $addRow = {
         $number = $rows.Count + 1
         $border = [Windows.Controls.Border]::new()
-        $border.BorderBrush = [Windows.Media.BrushConverter]::new().ConvertFromString('#344056')
+        $border.BorderBrush = [Windows.Media.BrushConverter]::new().ConvertFromString('#33333A')
         $border.BorderThickness = [Windows.Thickness]::new(1)
         $border.CornerRadius = [Windows.CornerRadius]::new(5)
         $border.Padding = [Windows.Thickness]::new(10)
@@ -4594,6 +4740,9 @@ $script:AppVersion = Get-AppVersion -AppRoot $script:AppRoot
 # Deliberately ASCII. This file has no byte order mark, so Windows PowerShell 5
 # reads it in the system code page: a middot here arrived on screen as "Â·".
 $AppSubtitleText.Text = "Slideshow automation studio  -  v$($script:AppVersion)"
+Set-WindowIcon -Target $window
+$appLogo = Get-AppIconImage
+if ($null -ne $appLogo) { $AppLogoImage.Source = $appLogo }
 # Also in the title bar and taskbar, so the running version is identifiable
 # without opening anything.
 $window.Title = "CreatorFlow $($script:AppVersion)"

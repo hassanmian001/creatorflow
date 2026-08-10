@@ -166,7 +166,9 @@ publish the runtime once with:
     # Shortcuts. WScript.Shell is present on every Windows install.
     Write-Step 'Creating shortcuts...'
     $launcher = Join-Path $InstallDirectory 'SlideshowVideoTool.ps1'
-    $iconSource = Join-Path $InstallDirectory 'Shaders\app.ico'
+    # This pointed at Shaders\app.ico, which has never existed, so both
+    # shortcuts silently fell back to the PowerShell icon.
+    $iconSource = Join-Path $InstallDirectory 'Assets\CreatorFlow.ico'
     $shell = New-Object -ComObject WScript.Shell
     try {
         $startMenu = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'

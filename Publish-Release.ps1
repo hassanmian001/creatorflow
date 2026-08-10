@@ -45,7 +45,10 @@ $appItems = @(
     'Start Tool.bat',
     'VERSION',
     'README.md',
-    'Shaders'
+    'Shaders',
+    # The window and shortcut icons. Built from the logo by Build-AppIcon.ps1
+    # and committed, so an installation never has to generate them.
+    'Assets'
 )
 
 function Get-UpdateSetting {
