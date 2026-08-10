@@ -36,157 +36,457 @@ New-Item -ItemType Directory -Path $script:DataRoot -Force | Out-Null
 $xaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="CreatorFlow" Width="1280" Height="780" MinWidth="1000" MinHeight="650" WindowState="Maximized"
-        WindowStartupLocation="CenterScreen" Background="#080B12" Foreground="#F7F7FB"
-        FontFamily="Segoe UI" UseLayoutRounding="True">
+        Title="CreatorFlow" Width="1360" Height="820" MinWidth="1120" MinHeight="680" WindowState="Maximized"
+        WindowStartupLocation="CenterScreen" Background="#17171A" Foreground="#E9E9E6"
+        FontFamily="Segoe UI" UseLayoutRounding="True" TextOptions.TextFormattingMode="Display">
     <Window.Resources>
-        <SolidColorBrush x:Key="PanelBrush" Color="#111722"/>
-        <SolidColorBrush x:Key="CardBrush" Color="#171E2B"/>
-        <SolidColorBrush x:Key="BorderBrush" Color="#293246"/>
-        <SolidColorBrush x:Key="MutedBrush" Color="#94A0B5"/>
-        <SolidColorBrush x:Key="AccentBrush" Color="#8B5CF6"/>
-        <SolidColorBrush x:Key="CyanBrush" Color="#22C7E8"/>
+        <!-- Every grey here is hue-neutral on purpose. This window sits beside
+             the picture being judged, and a blue or warm cast in the chrome
+             shifts how the photograph beside it reads. The only saturated
+             colour in the interface is tungsten, and it is spent on three
+             things only: the active step, the primary action, and the caption
+             currently being edited. -->
+        <SolidColorBrush x:Key="GroundBrush" Color="#17171A"/>
+        <SolidColorBrush x:Key="PanelBrush" Color="#1E1E22"/>
+        <SolidColorBrush x:Key="RaisedBrush" Color="#26262B"/>
+        <SolidColorBrush x:Key="SunkenBrush" Color="#101012"/>
+        <SolidColorBrush x:Key="LineBrush" Color="#33333A"/>
+        <SolidColorBrush x:Key="StrongLineBrush" Color="#41414A"/>
+        <SolidColorBrush x:Key="TextBrush" Color="#E9E9E6"/>
+        <SolidColorBrush x:Key="DimBrush" Color="#A3A39E"/>
+        <SolidColorBrush x:Key="MutedBrush" Color="#7E7E7A"/>
+        <SolidColorBrush x:Key="AccentBrush" Color="#E0913F"/>
+        <SolidColorBrush x:Key="AccentDeepBrush" Color="#8A5424"/>
+        <SolidColorBrush x:Key="AccentTintBrush" Color="#2A2119"/>
+        <SolidColorBrush x:Key="OkBrush" Color="#7CA97C"/>
+        <SolidColorBrush x:Key="BadBrush" Color="#C87068"/>
 
         <Style TargetType="TextBlock">
-            <Setter Property="Foreground" Value="#F7F7FB"/>
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
             <Setter Property="VerticalAlignment" Value="Center"/>
         </Style>
+
         <Style TargetType="Button">
-            <Setter Property="Background" Value="#20293A"/>
-            <Setter Property="Foreground" Value="White"/>
-            <Setter Property="BorderBrush" Value="#344057"/>
+            <Setter Property="Background" Value="{StaticResource RaisedBrush}"/>
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource LineBrush}"/>
             <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="Padding" Value="13,8"/>
+            <Setter Property="Padding" Value="13,7"/>
             <Setter Property="Margin" Value="3"/>
+            <Setter Property="FontSize" Value="12.5"/>
             <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="SnapsToDevicePixels" Value="True"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
                         <Border x:Name="ButtonBorder" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
-                                BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="7" Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="5" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="Center"/>
                         </Border>
                         <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="ButtonBorder" Property="Opacity" Value="0.86"/></Trigger>
-                            <Trigger Property="IsPressed" Value="True"><Setter TargetName="ButtonBorder" Property="Opacity" Value="0.68"/></Trigger>
-                            <Trigger Property="IsEnabled" Value="False"><Setter TargetName="ButtonBorder" Property="Opacity" Value="0.38"/></Trigger>
+                            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="ButtonBorder" Property="Opacity" Value="0.84"/></Trigger>
+                            <Trigger Property="IsPressed" Value="True"><Setter TargetName="ButtonBorder" Property="Opacity" Value="0.64"/></Trigger>
+                            <Trigger Property="IsEnabled" Value="False"><Setter TargetName="ButtonBorder" Property="Opacity" Value="0.55"/></Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="ButtonBorder" Property="BorderBrush" Value="{StaticResource AccentBrush}"/></Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
         </Style>
-        <Style x:Key="NavButtonStyle" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+
+        <!-- One workflow step. The badge, label and summary are named so the
+             code can show each step's own state without rebuilding the rail. -->
+        <Style x:Key="StepButtonStyle" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
             <Setter Property="Background" Value="Transparent"/>
             <Setter Property="BorderBrush" Value="Transparent"/>
-            <Setter Property="HorizontalContentAlignment" Value="Left"/>
-            <Setter Property="Padding" Value="16,12"/>
-            <Setter Property="Margin" Value="8,3"/>
-            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="Padding" Value="9,8"/>
+            <Setter Property="Margin" Value="8,1"/>
         </Style>
+
+        <Style x:Key="ToolButtonStyle" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderBrush" Value="Transparent"/>
+            <Setter Property="Foreground" Value="{StaticResource MutedBrush}"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="Padding" Value="9,6"/>
+            <Setter Property="Margin" Value="8,1"/>
+            <Setter Property="FontSize" Value="12.5"/>
+        </Style>
+
         <Style x:Key="PrimaryButtonStyle" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-            <Setter Property="Background" Value="#7C3AED"/>
-            <Setter Property="BorderBrush" Value="#9B70F7"/>
+            <Setter Property="Background" Value="{StaticResource AccentBrush}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}"/>
+            <Setter Property="Foreground" Value="#1C1206"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Padding" Value="16,7"/>
+            <Style.Triggers>
+                <!-- Tungsten is bright enough that dimming alone still reads as
+                     a button waiting to be pressed. When it cannot be pressed
+                     it gives up the accent entirely. -->
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Background" Value="{StaticResource RaisedBrush}"/>
+                    <Setter Property="BorderBrush" Value="{StaticResource LineBrush}"/>
+                    <Setter Property="Foreground" Value="{StaticResource MutedBrush}"/>
+                </Trigger>
+            </Style.Triggers>
         </Style>
-        <Style x:Key="CyanButtonStyle" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-            <Setter Property="Background" Value="#126D88"/>
-            <Setter Property="BorderBrush" Value="#22C7E8"/>
-            <Setter Property="FontWeight" Value="SemiBold"/>
+
+        <Style x:Key="QuietButtonStyle" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderBrush" Value="{StaticResource LineBrush}"/>
+            <Setter Property="Foreground" Value="{StaticResource DimBrush}"/>
         </Style>
+
+        <Style x:Key="DangerButtonStyle" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderBrush" Value="#5A3A38"/>
+            <Setter Property="Foreground" Value="{StaticResource BadBrush}"/>
+        </Style>
+
+        <Style x:Key="TabButtonStyle" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderBrush" Value="Transparent"/>
+            <Setter Property="Foreground" Value="{StaticResource MutedBrush}"/>
+            <Setter Property="Margin" Value="0"/>
+            <Setter Property="Padding" Value="0,6"/>
+            <Setter Property="FontSize" Value="11.5"/>
+        </Style>
+
         <Style TargetType="TextBox">
-            <Setter Property="Background" Value="#0E1420"/>
-            <Setter Property="Foreground" Value="White"/>
-            <Setter Property="BorderBrush" Value="#344057"/>
+            <Setter Property="Background" Value="{StaticResource SunkenBrush}"/>
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+            <Setter Property="CaretBrush" Value="{StaticResource AccentBrush}"/>
+            <Setter Property="SelectionBrush" Value="{StaticResource AccentDeepBrush}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource LineBrush}"/>
+            <Setter Property="BorderThickness" Value="1"/>
             <Setter Property="Padding" Value="8,6"/>
-            <Setter Property="Margin" Value="3"/>
+            <Setter Property="Margin" Value="0"/>
+            <Setter Property="FontSize" Value="12.5"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TextBox">
+                        <Border x:Name="TextBoxBorder" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="4">
+                            <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="TextBoxBorder" Property="BorderBrush" Value="{StaticResource AccentBrush}"/></Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
+
+        <!-- The stock dark-on-dark ComboBox was unreadable. This template owns
+             both the closed field and the popup so neither can inherit a
+             system colour that does not belong in a dark window. -->
+        <Style TargetType="ComboBoxItem">
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Padding" Value="9,6"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBoxItem">
+                        <Border x:Name="ItemBorder" Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsHighlighted" Value="True"><Setter TargetName="ItemBorder" Property="Background" Value="{StaticResource AccentTintBrush}"/></Trigger>
+                            <Trigger Property="IsSelected" Value="True"><Setter TargetName="ItemBorder" Property="Background" Value="{StaticResource RaisedBrush}"/></Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <Style TargetType="ComboBox">
-            <Setter Property="Background" Value="#0E1420"/>
-            <Setter Property="Foreground" Value="#111827"/>
-            <Setter Property="BorderBrush" Value="#344057"/>
-            <Setter Property="Padding" Value="7,5"/>
-            <Setter Property="Margin" Value="3"/>
+            <Setter Property="Background" Value="{StaticResource SunkenBrush}"/>
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource LineBrush}"/>
+            <Setter Property="Margin" Value="0"/>
+            <Setter Property="FontSize" Value="12.5"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBox">
+                        <Grid>
+                            <ToggleButton x:Name="ToggleHost" Focusable="False" ClickMode="Press"
+                                          IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
+                                <ToggleButton.Template>
+                                    <ControlTemplate TargetType="ToggleButton">
+                                        <Border x:Name="FieldBorder" Background="{StaticResource SunkenBrush}" BorderBrush="{StaticResource LineBrush}"
+                                                BorderThickness="1" CornerRadius="4">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="22"/></Grid.ColumnDefinitions>
+                                                <Path Grid.Column="1" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                      Data="M0,0 L8,0 L4,5 Z" Fill="#8E8E8A"/>
+                                            </Grid>
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="FieldBorder" Property="BorderBrush" Value="{StaticResource StrongLineBrush}"/></Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </ToggleButton.Template>
+                            </ToggleButton>
+                            <ContentPresenter Content="{TemplateBinding SelectionBoxItem}" IsHitTestVisible="False"
+                                              Margin="10,0,26,0" VerticalAlignment="Center" TextElement.Foreground="{StaticResource TextBrush}"/>
+                            <Popup x:Name="PART_Popup" Placement="Bottom" AllowsTransparency="True" Focusable="False"
+                                   IsOpen="{TemplateBinding IsDropDownOpen}" PopupAnimation="Fade">
+                                <Border Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource StrongLineBrush}" BorderThickness="1"
+                                        CornerRadius="4" MinWidth="{TemplateBinding ActualWidth}" MaxHeight="320" Margin="0,3,0,0">
+                                    <ScrollViewer><ItemsPresenter/></ScrollViewer>
+                                </Border>
+                            </Popup>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.4"/></Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
+
         <Style TargetType="CheckBox">
-            <Setter Property="Foreground" Value="#E9EAF0"/>
-            <Setter Property="Margin" Value="4,6"/>
+            <Setter Property="Foreground" Value="{StaticResource DimBrush}"/>
+            <Setter Property="FontSize" Value="12.5"/>
+            <Setter Property="Margin" Value="0,4"/>
+            <Setter Property="Cursor" Value="Hand"/>
         </Style>
+
         <Style TargetType="Slider">
-            <Setter Property="Margin" Value="4,3"/>
+            <Setter Property="Margin" Value="0"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="IsMoveToPointEnabled" Value="True"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Slider">
+                        <Grid Height="20" Background="Transparent">
+                            <Border Height="3" CornerRadius="2" Background="{StaticResource StrongLineBrush}" VerticalAlignment="Center"/>
+                            <Track x:Name="PART_Track">
+                                <Track.DecreaseRepeatButton>
+                                    <RepeatButton Command="Slider.DecreaseLarge" Focusable="False">
+                                        <RepeatButton.Template>
+                                            <ControlTemplate TargetType="RepeatButton">
+                                                <Border Height="3" CornerRadius="2" Background="{StaticResource AccentBrush}" VerticalAlignment="Center"/>
+                                            </ControlTemplate>
+                                        </RepeatButton.Template>
+                                    </RepeatButton>
+                                </Track.DecreaseRepeatButton>
+                                <Track.IncreaseRepeatButton>
+                                    <RepeatButton Command="Slider.IncreaseLarge" Focusable="False">
+                                        <RepeatButton.Template>
+                                            <ControlTemplate TargetType="RepeatButton"><Border Background="Transparent"/></ControlTemplate>
+                                        </RepeatButton.Template>
+                                    </RepeatButton>
+                                </Track.IncreaseRepeatButton>
+                                <Track.Thumb>
+                                    <Thumb Width="12" Height="12">
+                                        <Thumb.Template>
+                                            <ControlTemplate TargetType="Thumb">
+                                                <Ellipse Fill="{StaticResource TextBrush}" Stroke="#0E0E10" StrokeThickness="1"/>
+                                            </ControlTemplate>
+                                        </Thumb.Template>
+                                    </Thumb>
+                                </Track.Thumb>
+                            </Track>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style TargetType="ProgressBar">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ProgressBar">
+                        <Border Background="{StaticResource StrongLineBrush}" CornerRadius="3" Height="5">
+                            <Grid HorizontalAlignment="Left" x:Name="PART_Track">
+                                <Border x:Name="PART_Indicator" Background="{StaticResource AccentBrush}" CornerRadius="3" HorizontalAlignment="Left"/>
+                            </Grid>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="LabelText" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{StaticResource MutedBrush}"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Margin" Value="0,0,0,5"/>
+        </Style>
+        <Style x:Key="RowLabel" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{StaticResource DimBrush}"/>
+            <Setter Property="FontSize" Value="12.5"/>
+        </Style>
+        <Style x:Key="ValueText" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{StaticResource DimBrush}"/>
+            <Setter Property="FontFamily" Value="Consolas"/>
+            <Setter Property="FontSize" Value="11.5"/>
+            <Setter Property="HorizontalAlignment" Value="Right"/>
+        </Style>
+        <Style x:Key="NoteText" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{StaticResource MutedBrush}"/>
+            <Setter Property="FontSize" Value="11.5"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+            <Setter Property="VerticalAlignment" Value="Top"/>
         </Style>
     </Window.Resources>
 
     <Grid x:Name="RootGrid">
         <Grid.RowDefinitions>
-            <RowDefinition Height="58"/>
+            <RowDefinition Height="46"/>
             <RowDefinition Height="*"/>
-            <RowDefinition Height="72"/>
+            <RowDefinition Height="64"/>
         </Grid.RowDefinitions>
         <Grid.ColumnDefinitions>
-            <ColumnDefinition x:Name="NavigationColumn" Width="175"/>
+            <ColumnDefinition x:Name="NavigationColumn" Width="218"/>
             <ColumnDefinition Width="*"/>
-            <ColumnDefinition x:Name="SettingsColumn" Width="340"/>
+            <ColumnDefinition x:Name="SettingsColumn" Width="320"/>
         </Grid.ColumnDefinitions>
 
-        <Border Grid.Row="0" Grid.ColumnSpan="3" Background="#0B1019" BorderBrush="#252D3D" BorderThickness="0,0,0,1">
-            <Grid Margin="18,0">
+        <!-- TITLE BAR -->
+        <Border Grid.Row="0" Grid.ColumnSpan="3" Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource LineBrush}" BorderThickness="0,0,0,1">
+            <Grid Margin="14,0">
                 <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                    <Border Width="36" Height="36" CornerRadius="10" Background="#7C3AED" Margin="0,0,11,0">
-                        <TextBlock Text="C" FontWeight="Bold" FontSize="20" HorizontalAlignment="Center"/>
+                    <Border Width="22" Height="22" CornerRadius="5" Margin="0,0,10,0">
+                        <Border.Background>
+                            <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                <GradientStop Color="#E0913F" Offset="0"/>
+                                <GradientStop Color="#8A5424" Offset="1"/>
+                            </LinearGradientBrush>
+                        </Border.Background>
+                        <TextBlock Text="C" FontWeight="Bold" FontSize="12" Foreground="#1A1206" HorizontalAlignment="Center"/>
                     </Border>
-                    <StackPanel>
-                        <TextBlock Text="CreatorFlow" FontSize="20" FontWeight="SemiBold"/>
-                        <TextBlock x:Name="AppSubtitleText" Text="Slideshow automation studio" Foreground="#7F8BA0" FontSize="11"/>
-                    </StackPanel>
+                    <TextBlock Text="CreatorFlow" FontSize="13.5" FontWeight="SemiBold"/>
+                    <TextBlock Text="/" Foreground="#41414A" Margin="9,0"/>
+                    <TextBlock x:Name="AppSubtitleText" Text="Slideshow automation studio" Foreground="{StaticResource DimBrush}" FontSize="12.5"/>
                 </StackPanel>
-                <TextBlock Grid.Column="1" Text="YouTube Slideshow Project" Foreground="#B8C0D0" FontSize="14" Margin="30,0"/>
                 <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
-                    <Border Background="#121A20" BorderBrush="#315D4A" BorderThickness="1" CornerRadius="7" Padding="11,7" Margin="3">
-                        <StackPanel Orientation="Horizontal">
-                            <Ellipse Width="8" Height="8" Fill="#55D98B" Margin="0,0,7,0"/>
-                            <TextBlock x:Name="EncoderText" Text="Checking GPU..." Foreground="#BDEFD0" FontSize="12"/>
+                    <Border Background="{StaticResource RaisedBrush}" BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="13" Padding="10,0" Height="26" Margin="3">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <Ellipse Width="6" Height="6" Fill="{StaticResource OkBrush}" Margin="0,0,7,0"/>
+                            <TextBlock x:Name="EncoderText" Text="Checking GPU..." Foreground="{StaticResource DimBrush}" FontSize="11.5"/>
                         </StackPanel>
                     </Border>
-                    <Button x:Name="OpenProjectButton" Content="Open"/>
-                    <Button x:Name="SaveProjectButton" Content="Save"/>
+                    <Button x:Name="OpenProjectButton" Content="Open" Style="{StaticResource QuietButtonStyle}"/>
+                    <Button x:Name="SaveProjectButton" Content="Save" Style="{StaticResource QuietButtonStyle}"/>
                 </StackPanel>
             </Grid>
         </Border>
 
-        <Border x:Name="NavigationPanel" Grid.Row="1" Grid.Column="0" Background="#0B1019" BorderBrush="#252D3D" BorderThickness="0,0,1,0">
+        <!-- WORKFLOW RAIL -->
+        <Border x:Name="NavigationPanel" Grid.Row="1" Grid.Column="0" Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource LineBrush}" BorderThickness="0,0,1,0">
             <Grid>
                 <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-                <TextBlock Text="SETTINGS" Foreground="#667085" FontSize="10" FontWeight="Bold" Margin="20,20,0,8"/>
+                <TextBlock Text="WORKFLOW" Foreground="{StaticResource MutedBrush}" FontSize="10" FontWeight="Bold" Margin="17,15,0,9"/>
+
                 <StackPanel Grid.Row="1">
-                    <Button x:Name="NavMediaButton" Style="{StaticResource NavButtonStyle}" Content="Media and Audio"/>
-                    <Button x:Name="NavMotionButton" Style="{StaticResource NavButtonStyle}" Content="Motion"/>
-                    <Button x:Name="NavCaptionsButton" Style="{StaticResource NavButtonStyle}" Content="Captions"/>
-                    <Button x:Name="NavBlankingButton" Style="{StaticResource NavButtonStyle}" Content="Blanking Fill"/>
-                    <Button x:Name="NavExportButton" Style="{StaticResource NavButtonStyle}" Content="Export"/>
-                    <Border Height="1" Background="#252D3D" Margin="15,15"/>
-                    <Button x:Name="BatchButton" Style="{StaticResource NavButtonStyle}" Content="Batch Projects"/>
-                    <Button x:Name="RenderHistoryButton" Style="{StaticResource NavButtonStyle}" Content="Render History"/>
-                    <Button x:Name="CheckUpdatesButton" Style="{StaticResource NavButtonStyle}" Content="Check for Updates"/>
+                    <!-- The five steps are numbered because they genuinely are a
+                         sequence: there is nothing to caption before a voiceover
+                         is chosen, and nothing to export before either. -->
+                    <Button x:Name="NavMediaButton" Style="{StaticResource StepButtonStyle}">
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="26"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                            <Border x:Name="NavMediaBadge" Grid.RowSpan="2" Width="20" Height="20" CornerRadius="10" VerticalAlignment="Top" Margin="0,1,0,0"
+                                    Background="Transparent" BorderBrush="{StaticResource StrongLineBrush}" BorderThickness="1">
+                                <TextBlock x:Name="NavMediaBadgeText" Text="1" FontSize="10.5" FontWeight="SemiBold" Foreground="{StaticResource MutedBrush}" HorizontalAlignment="Center"/>
+                            </Border>
+                            <TextBlock Grid.Column="1" Text="Source" FontSize="13"/>
+                            <TextBlock x:Name="NavMediaSummaryText" Grid.Column="1" Grid.Row="1" Text="Nothing chosen yet" Foreground="{StaticResource MutedBrush}" FontSize="11" TextTrimming="CharacterEllipsis"/>
+                        </Grid>
+                    </Button>
+                    <Button x:Name="NavMotionButton" Style="{StaticResource StepButtonStyle}">
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="26"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                            <Border x:Name="NavMotionBadge" Grid.RowSpan="2" Width="20" Height="20" CornerRadius="10" VerticalAlignment="Top" Margin="0,1,0,0"
+                                    Background="Transparent" BorderBrush="{StaticResource StrongLineBrush}" BorderThickness="1">
+                                <TextBlock x:Name="NavMotionBadgeText" Text="2" FontSize="10.5" FontWeight="SemiBold" Foreground="{StaticResource MutedBrush}" HorizontalAlignment="Center"/>
+                            </Border>
+                            <TextBlock Grid.Column="1" Text="Motion" FontSize="13"/>
+                            <TextBlock x:Name="NavMotionSummaryText" Grid.Column="1" Grid.Row="1" Text="5-7s holds, 110% zoom" Foreground="{StaticResource MutedBrush}" FontSize="11" TextTrimming="CharacterEllipsis"/>
+                        </Grid>
+                    </Button>
+                    <Button x:Name="NavCaptionsButton" Style="{StaticResource StepButtonStyle}">
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="26"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                            <Border x:Name="NavCaptionsBadge" Grid.RowSpan="2" Width="20" Height="20" CornerRadius="10" VerticalAlignment="Top" Margin="0,1,0,0"
+                                    Background="Transparent" BorderBrush="{StaticResource StrongLineBrush}" BorderThickness="1">
+                                <TextBlock x:Name="NavCaptionsBadgeText" Text="3" FontSize="10.5" FontWeight="SemiBold" Foreground="{StaticResource MutedBrush}" HorizontalAlignment="Center"/>
+                            </Border>
+                            <TextBlock Grid.Column="1" Text="Captions" FontSize="13"/>
+                            <TextBlock x:Name="NavCaptionsSummaryText" Grid.Column="1" Grid.Row="1" Text="Not generated" Foreground="{StaticResource MutedBrush}" FontSize="11" TextTrimming="CharacterEllipsis"/>
+                        </Grid>
+                    </Button>
+                    <Button x:Name="NavBlankingButton" Style="{StaticResource StepButtonStyle}">
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="26"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                            <Border x:Name="NavBlankingBadge" Grid.RowSpan="2" Width="20" Height="20" CornerRadius="10" VerticalAlignment="Top" Margin="0,1,0,0"
+                                    Background="Transparent" BorderBrush="{StaticResource StrongLineBrush}" BorderThickness="1">
+                                <TextBlock x:Name="NavBlankingBadgeText" Text="4" FontSize="10.5" FontWeight="SemiBold" Foreground="{StaticResource MutedBrush}" HorizontalAlignment="Center"/>
+                            </Border>
+                            <TextBlock Grid.Column="1" Text="Backdrop" FontSize="13"/>
+                            <TextBlock x:Name="NavBlankingSummaryText" Grid.Column="1" Grid.Row="1" Text="Blur 40, 65% bright" Foreground="{StaticResource MutedBrush}" FontSize="11" TextTrimming="CharacterEllipsis"/>
+                        </Grid>
+                    </Button>
+                    <Button x:Name="NavExportButton" Style="{StaticResource StepButtonStyle}">
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="26"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                            <Border x:Name="NavExportBadge" Grid.RowSpan="2" Width="20" Height="20" CornerRadius="10" VerticalAlignment="Top" Margin="0,1,0,0"
+                                    Background="Transparent" BorderBrush="{StaticResource StrongLineBrush}" BorderThickness="1">
+                                <TextBlock x:Name="NavExportBadgeText" Text="5" FontSize="10.5" FontWeight="SemiBold" Foreground="{StaticResource MutedBrush}" HorizontalAlignment="Center"/>
+                            </Border>
+                            <TextBlock Grid.Column="1" Text="Export" FontSize="13"/>
+                            <TextBlock x:Name="NavExportSummaryText" Grid.Column="1" Grid.Row="1" Text="No destination chosen" Foreground="{StaticResource MutedBrush}" FontSize="11" TextTrimming="CharacterEllipsis"/>
+                        </Grid>
+                    </Button>
+
+                    <Border Height="1" Background="{StaticResource LineBrush}" Margin="17,14"/>
+
+                    <Button x:Name="BatchButton" Style="{StaticResource ToolButtonStyle}">
+                        <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="Batch projects" Foreground="{StaticResource MutedBrush}" FontSize="12.5"/>
+                        </Grid>
+                    </Button>
+                    <Button x:Name="RenderHistoryButton" Style="{StaticResource ToolButtonStyle}">
+                        <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="Render history" Foreground="{StaticResource MutedBrush}" FontSize="12.5"/>
+                            <Border x:Name="HistoryCountBadge" Grid.Column="1" Background="{StaticResource RaisedBrush}" BorderBrush="{StaticResource LineBrush}" BorderThickness="1"
+                                    CornerRadius="9" Padding="7,0" Height="17" Visibility="Collapsed">
+                                <TextBlock x:Name="HistoryCountText" Text="0" FontSize="10" Foreground="{StaticResource DimBrush}"/>
+                            </Border>
+                        </Grid>
+                    </Button>
+                    <Button x:Name="CheckUpdatesButton" Style="{StaticResource ToolButtonStyle}" Content="Check for updates"/>
                 </StackPanel>
-                <StackPanel Grid.Row="2" Margin="8,0,8,12">
-                    <Border Background="#111927" CornerRadius="8" Padding="12" Margin="3">
+
+                <StackPanel Grid.Row="2" Margin="11,0,11,12">
+                    <Border Background="{StaticResource SunkenBrush}" BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="5" Padding="11,9">
                         <StackPanel>
-                            <TextBlock Text="1080p / 24 FPS" FontWeight="SemiBold"/>
-                            <TextBlock Text="H.264 production workflow" Foreground="#78859A" FontSize="11" Margin="0,3,0,0"/>
+                            <TextBlock Text="OUTPUT" Foreground="{StaticResource MutedBrush}" FontSize="10" FontWeight="Bold"/>
+                            <TextBlock Text="1920x1080  24 fps  H.264" Foreground="{StaticResource DimBrush}" FontFamily="Consolas" FontSize="11.5" Margin="0,4,0,0"/>
                         </StackPanel>
                     </Border>
                 </StackPanel>
             </Grid>
         </Border>
 
-        <Grid x:Name="PlayerPanel" Grid.Row="1" Grid.Column="1" Margin="16,14,16,12">
-            <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="145"/></Grid.RowDefinitions>
-            <Border Grid.Row="0" Background="#020407" BorderBrush="#313A4D" BorderThickness="1" CornerRadius="10">
+        <!-- STAGE -->
+        <Grid x:Name="PlayerPanel" Grid.Row="1" Grid.Column="1" Margin="14">
+            <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="140"/></Grid.RowDefinitions>
+
+            <Border Grid.Row="0" Background="#0A0A0C" BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="6">
                 <Grid ClipToBounds="True">
                     <MediaElement x:Name="PreviewMedia" LoadedBehavior="Manual" UnloadedBehavior="Stop" Stretch="Uniform" ScrubbingEnabled="True" Volume="0.8"/>
                     <Canvas x:Name="CaptionOverlayCanvas" Background="Transparent" ClipToBounds="True">
-                        <Border x:Name="LiveCaptionBorder" Visibility="Collapsed" CornerRadius="7" Padding="12,7" Background="#00000000">
+                        <Border x:Name="LiveCaptionBorder" Visibility="Collapsed" CornerRadius="4" Padding="12,7" Background="#00000000">
                             <Grid>
                                 <TextBlock x:Name="LiveCaptionText" Text="Live caption preview" TextWrapping="Wrap" TextAlignment="Center" Foreground="White" FontFamily="Segoe UI Semibold" FontWeight="SemiBold"/>
                                 <Thumb x:Name="CaptionMoveThumb" Background="Transparent" Cursor="SizeAll" ToolTip="Drag to reposition captions">
@@ -198,7 +498,8 @@ $xaml = @'
                                         </ControlTemplate>
                                     </Thumb.Template>
                                 </Thumb>
-                                <Thumb x:Name="CaptionResizeThumb" Width="17" Height="17" HorizontalAlignment="Right" VerticalAlignment="Bottom" Cursor="SizeNWSE" Background="#CC22C7E8" BorderBrush="White" BorderThickness="1" ToolTip="Drag to resize captions">
+                                <Thumb x:Name="CaptionResizeThumb" Width="15" Height="15" HorizontalAlignment="Right" VerticalAlignment="Bottom" Cursor="SizeNWSE"
+                                       Background="#E0913F" BorderBrush="White" BorderThickness="1" ToolTip="Drag to resize captions">
                                     <Thumb.Template>
                                         <ControlTemplate TargetType="Thumb">
                                             <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"/>
@@ -208,130 +509,267 @@ $xaml = @'
                             </Grid>
                         </Border>
                     </Canvas>
-                    <Border VerticalAlignment="Top" HorizontalAlignment="Right" Background="#B00B1019" CornerRadius="6" Padding="9,5" Margin="12">
-                        <TextBlock Text="1920 x 1080   |   24 FPS" Foreground="#C7D0DF" FontSize="11"/>
+
+                    <Border VerticalAlignment="Top" HorizontalAlignment="Right" Background="#C60C0C0E" BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="4" Padding="8,4" Margin="11">
+                        <TextBlock Text="1920x1080  |  24 fps" Foreground="{StaticResource DimBrush}" FontFamily="Consolas" FontSize="10.5"/>
                     </Border>
-                    <Border VerticalAlignment="Bottom" Background="#D50A0D13" Padding="10,7">
+
+                    <Border VerticalAlignment="Bottom" Padding="12,9">
+                        <Border.Background>
+                            <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                                <GradientStop Color="#000E0E10" Offset="0"/>
+                                <GradientStop Color="#F00E0E10" Offset="0.45"/>
+                            </LinearGradientBrush>
+                        </Border.Background>
                         <Grid>
-                            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="120"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                            <Button x:Name="PlayPauseButton" Content="Play" Width="66"/>
-                            <Slider x:Name="SeekSlider" Grid.Column="1" Minimum="0" Maximum="60" Margin="10,0"/>
-                            <TextBlock x:Name="TimeText" Grid.Column="2" Text="00:00 / 01:00" Foreground="#C7D0DF" Margin="8,0"/>
-                            <Slider x:Name="VolumeSlider" Grid.Column="3" Minimum="0" Maximum="1" Value="0.8" Margin="10,0"/>
-                            <Button x:Name="FullScreenButton" Grid.Column="4" Content="Full Screen"/>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/><ColumnDefinition Width="110"/><ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <Button x:Name="PlayPauseButton" Content="Play" Width="62"/>
+                            <TextBlock x:Name="TimeText" Grid.Column="1" Text="00:00 / 01:00" Foreground="{StaticResource DimBrush}" FontFamily="Consolas" FontSize="11.5" Margin="10,0,4,0"/>
+                            <Slider x:Name="SeekSlider" Grid.Column="2" Minimum="0" Maximum="60" Margin="10,0"/>
+                            <TextBlock Grid.Column="3" Text="Vol" Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="6,0,4,0"/>
+                            <Slider x:Name="VolumeSlider" Grid.Column="4" Minimum="0" Maximum="1" Value="0.8" Margin="0,0,8,0"/>
+                            <Button x:Name="FullScreenButton" Grid.Column="5" Content="Full screen" Style="{StaticResource QuietButtonStyle}"/>
                         </Grid>
                     </Border>
                 </Grid>
             </Border>
 
-            <Border Grid.Row="1" Background="#101620" BorderBrush="#293246" BorderThickness="1" CornerRadius="10" Margin="0,12,0,0" Padding="12">
+            <Border Grid.Row="1" Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="6" Margin="0,12,0,0" Padding="12,10">
                 <Grid>
-                    <Grid.RowDefinitions><RowDefinition Height="30"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                    <Grid.RowDefinitions><RowDefinition Height="24"/><RowDefinition Height="*"/></Grid.RowDefinitions>
                     <Grid>
                         <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="Storyboard" FontSize="14" FontWeight="SemiBold"/>
-                            <TextBlock x:Name="StoryboardSummaryText" Text="  Generate a preview to build the randomized timeline" Foreground="#78859A" FontSize="11" Margin="7,0,0,0"/>
+                            <TextBlock Text="Storyboard" FontSize="12.5" FontWeight="SemiBold"/>
+                            <TextBlock x:Name="StoryboardSummaryText" Text="Generate a preview to build the timeline" Foreground="{StaticResource MutedBrush}" FontSize="11.5" Margin="10,0,0,0"/>
                         </StackPanel>
-                        <TextBlock Grid.Column="1" Text="Direct cuts  |  Random zoom" Foreground="#78859A" FontSize="11"/>
+                        <TextBlock Grid.Column="1" Text="Shuffled, no repeats side by side" Foreground="{StaticResource MutedBrush}" FontSize="11"/>
                     </Grid>
-                    <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                    <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled" Margin="0,6,0,0">
                         <StackPanel x:Name="StoryboardPanel" Orientation="Horizontal"/>
                     </ScrollViewer>
                 </Grid>
             </Border>
         </Grid>
 
-        <Border x:Name="SettingsPanel" Grid.Row="1" Grid.Column="2" Background="#0E141F" BorderBrush="#252D3D" BorderThickness="1,0,0,0">
+        <!-- INSPECTOR -->
+        <Border x:Name="SettingsPanel" Grid.Row="1" Grid.Column="2" Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource LineBrush}" BorderThickness="1,0,0,0">
             <Grid>
                 <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
-                <Border Grid.Row="0" Padding="15,13,15,12" BorderBrush="#252D3D" BorderThickness="0,0,0,1">
+                <Border Grid.Row="0" Padding="15,13,15,12" BorderBrush="{StaticResource LineBrush}" BorderThickness="0,0,0,1">
                     <StackPanel>
-                        <TextBlock x:Name="SectionTitleText" Text="Media and Audio" FontSize="15" FontWeight="SemiBold"/>
-                        <TextBlock x:Name="SectionHintText" Text="Pick the photographs, the voiceover, and the watermark clip." Foreground="#78859A" FontSize="10.5" TextWrapping="Wrap" Margin="0,3,0,0"/>
+                        <TextBlock x:Name="SectionTitleText" Text="Source" FontSize="14" FontWeight="SemiBold"/>
+                        <TextBlock x:Name="SectionHintText" Text="The photographs, the voiceover, and the overlay clip." Foreground="{StaticResource MutedBrush}" FontSize="11.5" TextWrapping="Wrap" Margin="0,3,0,0"/>
                     </StackPanel>
                 </Border>
 
                 <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
                     <!-- Every section occupies the same cell; only the active one is visible. -->
-                    <Grid Margin="13,13,13,20">
+                    <Grid Margin="15,14,15,22">
 
+                        <!-- SOURCE -->
                         <StackPanel x:Name="SectionMedia">
-                            <TextBlock Text="Image folder" Foreground="#94A0B5" FontSize="11"/>
-                            <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBox x:Name="ImageFolderText"/><Button x:Name="BrowseImagesButton" Grid.Column="1" Content="Browse"/></Grid>
-                            <TextBlock Text="Voiceover (M4A)" Foreground="#94A0B5" FontSize="11" Margin="0,9,0,0"/>
-                            <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBox x:Name="AudioText"/><Button x:Name="BrowseAudioButton" Grid.Column="1" Content="Browse"/></Grid>
-                            <TextBlock Text="Screen watermark (MOV or MP4)" Foreground="#94A0B5" FontSize="11" Margin="0,9,0,0"/>
-                            <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBox x:Name="WatermarkText"/><Button x:Name="BrowseWatermarkButton" Grid.Column="1" Content="Browse"/></Grid>
-                            <Border Background="#131C2A" CornerRadius="8" Padding="12" Margin="3,16,3,0">
-                                <StackPanel>
-                                    <TextBlock Text="Only files directly inside the folder are used." Foreground="#8490A5" FontSize="10.5" TextWrapping="Wrap"/>
-                                    <TextBlock Text="JPG, JPEG, PNG and WEBP are supported." Foreground="#8490A5" FontSize="10.5" TextWrapping="Wrap" Margin="0,4,0,0"/>
-                                </StackPanel>
-                            </Border>
-                        </StackPanel>
-
-                        <StackPanel x:Name="SectionMotion" Visibility="Collapsed">
-                            <Grid Margin="0,4"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="78"/></Grid.ColumnDefinitions><TextBlock Text="Minimum duration" Foreground="#B9C1D0"/><TextBox x:Name="MinimumDurationText" Grid.Column="1" Text="5.0" HorizontalContentAlignment="Center"/></Grid>
-                            <Grid Margin="0,4"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="78"/></Grid.ColumnDefinitions><TextBlock Text="Maximum duration" Foreground="#B9C1D0"/><TextBox x:Name="MaximumDurationText" Grid.Column="1" Text="7.0" HorizontalContentAlignment="Center"/></Grid>
-                            <Grid Margin="0,4"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="78"/></Grid.ColumnDefinitions><TextBlock Text="Maximum zoom" Foreground="#B9C1D0"/><TextBox x:Name="ZoomText" Grid.Column="1" Text="110" HorizontalContentAlignment="Center"/></Grid>
-                            <Border Background="#131C2A" CornerRadius="8" Padding="12" Margin="3,16,3,0">
-                                <StackPanel>
-                                    <TextBlock Text="Each image holds for a random time inside this range." Foreground="#8490A5" FontSize="10.5" TextWrapping="Wrap"/>
-                                    <TextBlock Text="It also zooms in or out and drifts slowly across one axis. Both move at a constant rate, so the motion never stalls before a cut." Foreground="#8490A5" FontSize="10.5" TextWrapping="Wrap" Margin="0,5,0,0"/>
-                                </StackPanel>
-                            </Border>
-                        </StackPanel>
-
-                        <StackPanel x:Name="SectionCaptions" Visibility="Collapsed">
-                            <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="96"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="Mode" Foreground="#B9C1D0"/><ComboBox x:Name="CaptionModeCombo" Grid.Column="1" SelectedIndex="1"><ComboBoxItem Content="Off"/><ComboBoxItem Content="SRT only"/><ComboBoxItem Content="Burned only"/><ComboBoxItem Content="Burned + SRT"/></ComboBox></Grid>
-                            <Grid Margin="0,4,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="96"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="Preset" Foreground="#B9C1D0"/><ComboBox x:Name="CaptionPresetCombo" Grid.Column="1" SelectedIndex="0"><ComboBoxItem Content="1. Clean YouTube"/><ComboBoxItem Content="2. Modern News"/><ComboBoxItem Content="3. Minimal Shadow"/><ComboBoxItem Content="4. Translucent Box"/><ComboBoxItem Content="5. Yellow Headline"/><ComboBoxItem Content="6. Cyan Accent"/><ComboBoxItem Content="7. Documentary Serif"/><ComboBoxItem Content="8. Yellow Emphasis"/><ComboBoxItem Content="9. Upper Safe"/><ComboBoxItem Content="10. Compact Broadcast"/></ComboBox></Grid>
-                            <TextBlock x:Name="CaptionPresetHelpText" Text="White semibold text, centered safely above the bottom." Foreground="#8490A5" FontSize="10" TextWrapping="Wrap" Margin="99,4,4,2"/>
-                            <Grid Margin="0,7,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                                <Button x:Name="GenerateCaptionsButton" Content="Generate Captions" Background="#322257" BorderBrush="#7045C7"/>
-                                <Button x:Name="EditCaptionsButton" Grid.Column="1" Content="Edit Captions" Background="#20293A" BorderBrush="#4C5A72"/>
+                            <TextBlock Text="Photographs" Style="{StaticResource LabelText}"/>
+                            <Grid>
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                <TextBox x:Name="ImageFolderText"/>
+                                <Button x:Name="BrowseImagesButton" Grid.Column="1" Content="Browse" Style="{StaticResource QuietButtonStyle}" Margin="6,0,0,0"/>
                             </Grid>
-                            <TextBlock x:Name="CaptionStatusText" Text="Select a voiceover; captions are generated locally." Foreground="#8490A5" FontSize="11" TextWrapping="Wrap" Margin="4,4"/>
+                            <TextBlock x:Name="ImageSummaryText" Text="No folder chosen" Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="1,6,0,0" TextWrapping="Wrap"/>
 
-                            <TextBlock Text="TYPE" Foreground="#738097" FontSize="9.5" FontWeight="Bold" Margin="4,14,0,6"/>
-                            <Grid Margin="0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="96"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="Font" Foreground="#B9C1D0"/><ComboBox x:Name="CaptionFontCombo" Grid.Column="1" SelectedIndex="0"><ComboBoxItem Content="Segoe UI Semibold"/><ComboBoxItem Content="Segoe UI"/><ComboBoxItem Content="Arial"/><ComboBoxItem Content="Arial Narrow"/><ComboBoxItem Content="Georgia"/><ComboBoxItem Content="Calibri"/><ComboBoxItem Content="Verdana"/><ComboBoxItem Content="Trebuchet MS"/></ComboBox></Grid>
-                            <CheckBox x:Name="CaptionBoldCheckBox" Content="Bold text" IsChecked="True" Margin="99,2,0,3"/>
-                            <Grid Margin="0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="96"/><ColumnDefinition Width="*"/><ColumnDefinition Width="44"/></Grid.ColumnDefinitions><TextBlock Text="Size" Foreground="#B9C1D0"/><Slider x:Name="CaptionSizeSlider" Grid.Column="1" Minimum="10" Maximum="36" Value="16" TickFrequency="1"/><TextBlock x:Name="CaptionSizeValueText" Grid.Column="2" Text="16" HorizontalAlignment="Right"/></Grid>
-                            <Grid Margin="0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="96"/><ColumnDefinition Width="*"/><ColumnDefinition Width="44"/></Grid.ColumnDefinitions><TextBlock Text="Outline" Foreground="#B9C1D0"/><Slider x:Name="CaptionOutlineSlider" Grid.Column="1" Minimum="0" Maximum="8" Value="2" TickFrequency="0.5"/><TextBlock x:Name="CaptionOutlineValueText" Grid.Column="2" Text="2" HorizontalAlignment="Right"/></Grid>
-                            <Grid Margin="0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="96"/><ColumnDefinition Width="*"/><ColumnDefinition Width="44"/></Grid.ColumnDefinitions><TextBlock Text="Shadow" Foreground="#B9C1D0"/><Slider x:Name="CaptionShadowSlider" Grid.Column="1" Minimum="0" Maximum="8" Value="0" TickFrequency="0.5"/><TextBlock x:Name="CaptionShadowValueText" Grid.Column="2" Text="0" HorizontalAlignment="Right"/></Grid>
+                            <TextBlock Text="Voiceover" Style="{StaticResource LabelText}" Margin="0,16,0,5"/>
+                            <Grid>
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                <TextBox x:Name="AudioText"/>
+                                <Button x:Name="BrowseAudioButton" Grid.Column="1" Content="Browse" Style="{StaticResource QuietButtonStyle}" Margin="6,0,0,0"/>
+                            </Grid>
+                            <TextBlock x:Name="AudioSummaryText" Text="No voiceover chosen" Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="1,6,0,0" TextWrapping="Wrap"/>
 
-                            <TextBlock Text="COLOUR" Foreground="#738097" FontSize="9.5" FontWeight="Bold" Margin="4,14,0,6"/>
-                            <Grid Margin="0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="96"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="Text" Foreground="#B9C1D0"/><TextBox x:Name="CaptionTextColorText" Grid.Column="1" Text="#FFFFFF"/><Button x:Name="CaptionTextColorButton" Grid.Column="2" Content="Pick"/></Grid>
-                            <Grid Margin="0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="96"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="Outline" Foreground="#B9C1D0"/><TextBox x:Name="CaptionOutlineColorText" Grid.Column="1" Text="#000000"/><Button x:Name="CaptionOutlineColorButton" Grid.Column="2" Content="Pick"/></Grid>
-                            <Grid Margin="0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="96"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="Box" Foreground="#B9C1D0"/><TextBox x:Name="CaptionBackgroundColorText" Grid.Column="1" Text="#000000"/><Button x:Name="CaptionBackgroundColorButton" Grid.Column="2" Content="Pick"/></Grid>
-                            <Grid Margin="0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="96"/><ColumnDefinition Width="*"/><ColumnDefinition Width="44"/></Grid.ColumnDefinitions><TextBlock Text="Box opacity" Foreground="#B9C1D0"/><Slider x:Name="CaptionBackgroundOpacitySlider" Grid.Column="1" Minimum="0" Maximum="100" Value="0" TickFrequency="5"/><TextBlock x:Name="CaptionBackgroundOpacityValueText" Grid.Column="2" Text="0%" HorizontalAlignment="Right"/></Grid>
+                            <TextBlock Text="Overlay clip" Style="{StaticResource LabelText}" Margin="0,16,0,5"/>
+                            <Grid>
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                <TextBox x:Name="WatermarkText"/>
+                                <Button x:Name="BrowseWatermarkButton" Grid.Column="1" Content="Browse" Style="{StaticResource QuietButtonStyle}" Margin="6,0,0,0"/>
+                            </Grid>
+                            <TextBlock x:Name="WatermarkSummaryText" Text="No overlay chosen" Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="1,6,0,0" TextWrapping="Wrap"/>
 
-                            <TextBlock Text="PLACEMENT" Foreground="#738097" FontSize="9.5" FontWeight="Bold" Margin="4,14,0,6"/>
-                            <Grid Margin="0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="96"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="Alignment" Foreground="#B9C1D0"/><ComboBox x:Name="CaptionAlignmentCombo" Grid.Column="1" SelectedIndex="1"><ComboBoxItem Content="Left"/><ComboBoxItem Content="Center"/><ComboBoxItem Content="Right"/></ComboBox></Grid>
-                            <Grid Margin="0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="96"/><ColumnDefinition Width="*"/><ColumnDefinition Width="44"/></Grid.ColumnDefinitions><TextBlock Text="Position X" Foreground="#B9C1D0"/><Slider x:Name="CaptionPositionXSlider" Grid.Column="1" Minimum="5" Maximum="95" Value="50"/><TextBlock x:Name="CaptionPositionXValueText" Grid.Column="2" Text="50%" HorizontalAlignment="Right"/></Grid>
-                            <Grid Margin="0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="96"/><ColumnDefinition Width="*"/><ColumnDefinition Width="44"/></Grid.ColumnDefinitions><TextBlock Text="Position Y" Foreground="#B9C1D0"/><Slider x:Name="CaptionPositionYSlider" Grid.Column="1" Minimum="5" Maximum="95" Value="70"/><TextBlock x:Name="CaptionPositionYValueText" Grid.Column="2" Text="70%" HorizontalAlignment="Right"/></Grid>
-                            <Grid Margin="0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="96"/><ColumnDefinition Width="*"/><ColumnDefinition Width="44"/></Grid.ColumnDefinitions><TextBlock Text="Max width" Foreground="#B9C1D0"/><Slider x:Name="CaptionMaxWidthSlider" Grid.Column="1" Minimum="25" Maximum="95" Value="82"/><TextBlock x:Name="CaptionMaxWidthValueText" Grid.Column="2" Text="82%" HorizontalAlignment="Right"/></Grid>
-                            <Grid Margin="0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="96"/><ColumnDefinition Width="*"/><ColumnDefinition Width="44"/></Grid.ColumnDefinitions><TextBlock Text="Words / line" Foreground="#B9C1D0"/><Slider x:Name="CaptionWordsPerLineSlider" Grid.Column="1" Minimum="3" Maximum="20" Value="8" TickFrequency="1" IsSnapToTickEnabled="True"/><TextBlock x:Name="CaptionWordsPerLineValueText" Grid.Column="2" Text="8" HorizontalAlignment="Right"/></Grid>
-                            <Grid Margin="0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="96"/><ColumnDefinition Width="*"/><ColumnDefinition Width="44"/></Grid.ColumnDefinitions><TextBlock Text="Line height" Foreground="#B9C1D0"/><Slider x:Name="CaptionLineSpacingSlider" Grid.Column="1" Minimum="0.8" Maximum="1.5" Value="1" TickFrequency="0.05"/><TextBlock x:Name="CaptionLineSpacingValueText" Grid.Column="2" Text="1.00" HorizontalAlignment="Right"/></Grid>
-                            <TextBlock Text="Drag the caption in the player to move it. Drag the cyan corner to resize it." Foreground="#22C7E8" FontSize="10" TextWrapping="Wrap" Margin="4,10,4,0"/>
-                        </StackPanel>
-
-                        <StackPanel x:Name="SectionBlanking" Visibility="Collapsed">
-                            <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="48"/></Grid.ColumnDefinitions><TextBlock Text="Background blur" Foreground="#B9C1D0"/><TextBlock x:Name="BlurValueText" Grid.Column="1" Text="40" HorizontalAlignment="Right"/></Grid>
-                            <Slider x:Name="BlurSlider" Minimum="0" Maximum="100" Value="40" TickFrequency="1" IsSnapToTickEnabled="True"/>
-                            <Grid Margin="0,12,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="48"/></Grid.ColumnDefinitions><TextBlock Text="Background brightness" Foreground="#B9C1D0"/><TextBlock x:Name="BrightnessValueText" Grid.Column="1" Text="65%" HorizontalAlignment="Right"/></Grid>
-                            <Slider x:Name="BrightnessSlider" Minimum="20" Maximum="100" Value="65" TickFrequency="1" IsSnapToTickEnabled="True"/>
-                            <Border Background="#131C2A" CornerRadius="8" Padding="12" Margin="3,18,3,0">
-                                <TextBlock Text="A photograph that does not fill the 16:9 frame is shown whole, over a blurred and darkened copy of itself. These two controls shape that backdrop." Foreground="#8490A5" FontSize="10.5" TextWrapping="Wrap"/>
+                            <Border BorderBrush="{StaticResource StrongLineBrush}" BorderThickness="2,0,0,0" Padding="11,2" Margin="1,20,0,0">
+                                <StackPanel>
+                                    <TextBlock Text="Only files directly inside the folder are used. Sub-folders are ignored." Style="{StaticResource NoteText}"/>
+                                    <TextBlock Text="JPG, JPEG, PNG and WEBP are supported." Style="{StaticResource NoteText}" Margin="0,5,0,0"/>
+                                </StackPanel>
                             </Border>
                         </StackPanel>
 
+                        <!-- MOTION -->
+                        <StackPanel x:Name="SectionMotion" Visibility="Collapsed">
+                            <Grid Margin="0,3"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="76"/></Grid.ColumnDefinitions>
+                                <TextBlock Text="Shortest hold" Style="{StaticResource RowLabel}"/>
+                                <TextBox x:Name="MinimumDurationText" Grid.Column="1" Text="5.0" HorizontalContentAlignment="Center"/></Grid>
+                            <Grid Margin="0,7"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="76"/></Grid.ColumnDefinitions>
+                                <TextBlock Text="Longest hold" Style="{StaticResource RowLabel}"/>
+                                <TextBox x:Name="MaximumDurationText" Grid.Column="1" Text="7.0" HorizontalContentAlignment="Center"/></Grid>
+                            <Grid Margin="0,3"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="76"/></Grid.ColumnDefinitions>
+                                <TextBlock Text="Maximum zoom %" Style="{StaticResource RowLabel}"/>
+                                <TextBox x:Name="ZoomText" Grid.Column="1" Text="110" HorizontalContentAlignment="Center"/></Grid>
+                            <Border BorderBrush="{StaticResource StrongLineBrush}" BorderThickness="2,0,0,0" Padding="11,2" Margin="1,20,0,0">
+                                <StackPanel>
+                                    <TextBlock Text="Each image holds for a random time inside this range." Style="{StaticResource NoteText}"/>
+                                    <TextBlock Text="It also zooms in or out and drifts slowly across one axis. Both move at a constant rate, so the motion never stalls before a cut." Style="{StaticResource NoteText}" Margin="0,6,0,0"/>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+
+                        <!-- CAPTIONS -->
+                        <StackPanel x:Name="SectionCaptions" Visibility="Collapsed">
+                            <TextBlock Text="Where they appear" Style="{StaticResource LabelText}"/>
+                            <Border BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="5" Background="{StaticResource SunkenBrush}">
+                                <UniformGrid x:Name="CaptionModePanel" Rows="1" Columns="4"/>
+                            </Border>
+                            <!-- The mode and preset combo boxes remain the state the rest of
+                                 the application reads. They are hidden because the row of
+                                 buttons above and the swatches below drive them, which keeps
+                                 every existing handler working untouched. -->
+                            <ComboBox x:Name="CaptionModeCombo" Visibility="Collapsed" SelectedIndex="1">
+                                <ComboBoxItem Content="Off"/><ComboBoxItem Content="SRT only"/><ComboBoxItem Content="Burned only"/><ComboBoxItem Content="Burned + SRT"/>
+                            </ComboBox>
+
+                            <TextBlock Text="Look" Style="{StaticResource LabelText}" Margin="0,16,0,5"/>
+                            <UniformGrid x:Name="CaptionPresetSwatchPanel" Columns="3"/>
+                            <ComboBox x:Name="CaptionPresetCombo" Visibility="Collapsed" SelectedIndex="0">
+                                <ComboBoxItem Content="1. Clean YouTube"/><ComboBoxItem Content="2. Modern News"/><ComboBoxItem Content="3. Minimal Shadow"/>
+                                <ComboBoxItem Content="4. Translucent Box"/><ComboBoxItem Content="5. Yellow Headline"/><ComboBoxItem Content="6. Cyan Accent"/>
+                                <ComboBoxItem Content="7. Documentary Serif"/><ComboBoxItem Content="8. Yellow Emphasis"/><ComboBoxItem Content="9. Upper Safe"/>
+                                <ComboBoxItem Content="10. Compact Broadcast"/>
+                            </ComboBox>
+                            <TextBlock x:Name="CaptionPresetHelpText" Text="White semibold text, centered safely above the bottom." Style="{StaticResource NoteText}" Margin="1,7,0,0"/>
+
+                            <Grid Margin="0,14,0,0">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                <Button x:Name="GenerateCaptionsButton" Content="Generate" Margin="0,0,3,0"/>
+                                <Button x:Name="EditCaptionsButton" Grid.Column="1" Content="Edit text" Style="{StaticResource QuietButtonStyle}" Margin="3,0,0,0"/>
+                            </Grid>
+                            <TextBlock x:Name="CaptionStatusText" Text="Select a voiceover; captions are generated on this computer." Style="{StaticResource NoteText}" Margin="1,8,0,0"/>
+
+                            <TextBlock Text="Fine tuning" Style="{StaticResource LabelText}" Margin="0,18,0,5"/>
+                            <Border BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="5" Background="{StaticResource SunkenBrush}">
+                                <UniformGrid Rows="1" Columns="3">
+                                    <Button x:Name="CaptionTabTypeButton" Style="{StaticResource TabButtonStyle}" Content="Type"/>
+                                    <Button x:Name="CaptionTabColourButton" Style="{StaticResource TabButtonStyle}" Content="Colour"/>
+                                    <Button x:Name="CaptionTabPositionButton" Style="{StaticResource TabButtonStyle}" Content="Position"/>
+                                </UniformGrid>
+                            </Border>
+
+                            <Grid Margin="0,12,0,0">
+                                <StackPanel x:Name="CaptionGroupType">
+                                    <Grid Margin="0,3"><Grid.ColumnDefinitions><ColumnDefinition Width="88"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                        <TextBlock Text="Font" Style="{StaticResource RowLabel}"/>
+                                        <ComboBox x:Name="CaptionFontCombo" Grid.Column="1" SelectedIndex="0">
+                                            <ComboBoxItem Content="Segoe UI Semibold"/><ComboBoxItem Content="Segoe UI"/><ComboBoxItem Content="Arial"/><ComboBoxItem Content="Arial Narrow"/>
+                                            <ComboBoxItem Content="Georgia"/><ComboBoxItem Content="Calibri"/><ComboBoxItem Content="Verdana"/><ComboBoxItem Content="Trebuchet MS"/>
+                                        </ComboBox></Grid>
+                                    <CheckBox x:Name="CaptionBoldCheckBox" Content="Bold text" IsChecked="True" Margin="88,6,0,4"/>
+                                    <Grid Margin="0,4"><Grid.ColumnDefinitions><ColumnDefinition Width="88"/><ColumnDefinition Width="*"/><ColumnDefinition Width="42"/></Grid.ColumnDefinitions>
+                                        <TextBlock Text="Size" Style="{StaticResource RowLabel}"/>
+                                        <Slider x:Name="CaptionSizeSlider" Grid.Column="1" Minimum="10" Maximum="36" Value="16" TickFrequency="1"/>
+                                        <TextBlock x:Name="CaptionSizeValueText" Grid.Column="2" Text="16" Style="{StaticResource ValueText}"/></Grid>
+                                    <Grid Margin="0,4"><Grid.ColumnDefinitions><ColumnDefinition Width="88"/><ColumnDefinition Width="*"/><ColumnDefinition Width="42"/></Grid.ColumnDefinitions>
+                                        <TextBlock Text="Outline" Style="{StaticResource RowLabel}"/>
+                                        <Slider x:Name="CaptionOutlineSlider" Grid.Column="1" Minimum="0" Maximum="8" Value="2" TickFrequency="0.5"/>
+                                        <TextBlock x:Name="CaptionOutlineValueText" Grid.Column="2" Text="2" Style="{StaticResource ValueText}"/></Grid>
+                                    <Grid Margin="0,4"><Grid.ColumnDefinitions><ColumnDefinition Width="88"/><ColumnDefinition Width="*"/><ColumnDefinition Width="42"/></Grid.ColumnDefinitions>
+                                        <TextBlock Text="Shadow" Style="{StaticResource RowLabel}"/>
+                                        <Slider x:Name="CaptionShadowSlider" Grid.Column="1" Minimum="0" Maximum="8" Value="0" TickFrequency="0.5"/>
+                                        <TextBlock x:Name="CaptionShadowValueText" Grid.Column="2" Text="0" Style="{StaticResource ValueText}"/></Grid>
+                                    <Grid Margin="0,4"><Grid.ColumnDefinitions><ColumnDefinition Width="88"/><ColumnDefinition Width="*"/><ColumnDefinition Width="42"/></Grid.ColumnDefinitions>
+                                        <TextBlock Text="Words / line" Style="{StaticResource RowLabel}"/>
+                                        <Slider x:Name="CaptionWordsPerLineSlider" Grid.Column="1" Minimum="3" Maximum="20" Value="8" TickFrequency="1" IsSnapToTickEnabled="True"/>
+                                        <TextBlock x:Name="CaptionWordsPerLineValueText" Grid.Column="2" Text="8" Style="{StaticResource ValueText}"/></Grid>
+                                    <Grid Margin="0,4"><Grid.ColumnDefinitions><ColumnDefinition Width="88"/><ColumnDefinition Width="*"/><ColumnDefinition Width="42"/></Grid.ColumnDefinitions>
+                                        <TextBlock Text="Line height" Style="{StaticResource RowLabel}"/>
+                                        <Slider x:Name="CaptionLineSpacingSlider" Grid.Column="1" Minimum="0.8" Maximum="1.5" Value="1" TickFrequency="0.05"/>
+                                        <TextBlock x:Name="CaptionLineSpacingValueText" Grid.Column="2" Text="1.00" Style="{StaticResource ValueText}"/></Grid>
+                                </StackPanel>
+
+                                <StackPanel x:Name="CaptionGroupColour" Visibility="Collapsed">
+                                    <Grid Margin="0,4"><Grid.ColumnDefinitions><ColumnDefinition Width="88"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                        <TextBlock Text="Text" Style="{StaticResource RowLabel}"/>
+                                        <TextBox x:Name="CaptionTextColorText" Grid.Column="1" Text="#FFFFFF"/>
+                                        <Button x:Name="CaptionTextColorButton" Grid.Column="2" Content="Pick" Style="{StaticResource QuietButtonStyle}" Margin="6,0,0,0"/></Grid>
+                                    <Grid Margin="0,4"><Grid.ColumnDefinitions><ColumnDefinition Width="88"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                        <TextBlock Text="Outline" Style="{StaticResource RowLabel}"/>
+                                        <TextBox x:Name="CaptionOutlineColorText" Grid.Column="1" Text="#000000"/>
+                                        <Button x:Name="CaptionOutlineColorButton" Grid.Column="2" Content="Pick" Style="{StaticResource QuietButtonStyle}" Margin="6,0,0,0"/></Grid>
+                                    <Grid Margin="0,4"><Grid.ColumnDefinitions><ColumnDefinition Width="88"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                        <TextBlock Text="Box" Style="{StaticResource RowLabel}"/>
+                                        <TextBox x:Name="CaptionBackgroundColorText" Grid.Column="1" Text="#000000"/>
+                                        <Button x:Name="CaptionBackgroundColorButton" Grid.Column="2" Content="Pick" Style="{StaticResource QuietButtonStyle}" Margin="6,0,0,0"/></Grid>
+                                    <Grid Margin="0,4"><Grid.ColumnDefinitions><ColumnDefinition Width="88"/><ColumnDefinition Width="*"/><ColumnDefinition Width="42"/></Grid.ColumnDefinitions>
+                                        <TextBlock Text="Box opacity" Style="{StaticResource RowLabel}"/>
+                                        <Slider x:Name="CaptionBackgroundOpacitySlider" Grid.Column="1" Minimum="0" Maximum="100" Value="0" TickFrequency="5"/>
+                                        <TextBlock x:Name="CaptionBackgroundOpacityValueText" Grid.Column="2" Text="0%" Style="{StaticResource ValueText}"/></Grid>
+                                </StackPanel>
+
+                                <StackPanel x:Name="CaptionGroupPosition" Visibility="Collapsed">
+                                    <Grid Margin="0,4"><Grid.ColumnDefinitions><ColumnDefinition Width="88"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                        <TextBlock Text="Alignment" Style="{StaticResource RowLabel}"/>
+                                        <ComboBox x:Name="CaptionAlignmentCombo" Grid.Column="1" SelectedIndex="1">
+                                            <ComboBoxItem Content="Left"/><ComboBoxItem Content="Center"/><ComboBoxItem Content="Right"/>
+                                        </ComboBox></Grid>
+                                    <Grid Margin="0,4"><Grid.ColumnDefinitions><ColumnDefinition Width="88"/><ColumnDefinition Width="*"/><ColumnDefinition Width="42"/></Grid.ColumnDefinitions>
+                                        <TextBlock Text="Position X" Style="{StaticResource RowLabel}"/>
+                                        <Slider x:Name="CaptionPositionXSlider" Grid.Column="1" Minimum="5" Maximum="95" Value="50"/>
+                                        <TextBlock x:Name="CaptionPositionXValueText" Grid.Column="2" Text="50%" Style="{StaticResource ValueText}"/></Grid>
+                                    <Grid Margin="0,4"><Grid.ColumnDefinitions><ColumnDefinition Width="88"/><ColumnDefinition Width="*"/><ColumnDefinition Width="42"/></Grid.ColumnDefinitions>
+                                        <TextBlock Text="Position Y" Style="{StaticResource RowLabel}"/>
+                                        <Slider x:Name="CaptionPositionYSlider" Grid.Column="1" Minimum="5" Maximum="95" Value="70"/>
+                                        <TextBlock x:Name="CaptionPositionYValueText" Grid.Column="2" Text="70%" Style="{StaticResource ValueText}"/></Grid>
+                                    <Grid Margin="0,4"><Grid.ColumnDefinitions><ColumnDefinition Width="88"/><ColumnDefinition Width="*"/><ColumnDefinition Width="42"/></Grid.ColumnDefinitions>
+                                        <TextBlock Text="Max width" Style="{StaticResource RowLabel}"/>
+                                        <Slider x:Name="CaptionMaxWidthSlider" Grid.Column="1" Minimum="25" Maximum="95" Value="82"/>
+                                        <TextBlock x:Name="CaptionMaxWidthValueText" Grid.Column="2" Text="82%" Style="{StaticResource ValueText}"/></Grid>
+                                    <TextBlock Text="Drag the caption in the player to move it. Drag the tungsten corner to resize it." Foreground="{StaticResource AccentBrush}" FontSize="11" TextWrapping="Wrap" Margin="1,10,0,0"/>
+                                </StackPanel>
+                            </Grid>
+                        </StackPanel>
+
+                        <!-- BACKDROP -->
+                        <StackPanel x:Name="SectionBlanking" Visibility="Collapsed">
+                            <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="46"/></Grid.ColumnDefinitions>
+                                <TextBlock Text="Blur" Style="{StaticResource RowLabel}"/>
+                                <TextBlock x:Name="BlurValueText" Grid.Column="1" Text="40" Style="{StaticResource ValueText}"/></Grid>
+                            <Slider x:Name="BlurSlider" Minimum="0" Maximum="100" Value="40" TickFrequency="1" IsSnapToTickEnabled="True" Margin="0,4,0,0"/>
+                            <Grid Margin="0,16,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="46"/></Grid.ColumnDefinitions>
+                                <TextBlock Text="Brightness" Style="{StaticResource RowLabel}"/>
+                                <TextBlock x:Name="BrightnessValueText" Grid.Column="1" Text="65%" Style="{StaticResource ValueText}"/></Grid>
+                            <Slider x:Name="BrightnessSlider" Minimum="20" Maximum="100" Value="65" TickFrequency="1" IsSnapToTickEnabled="True" Margin="0,4,0,0"/>
+                            <Border BorderBrush="{StaticResource StrongLineBrush}" BorderThickness="2,0,0,0" Padding="11,2" Margin="1,22,0,0">
+                                <TextBlock Text="A photograph that does not fill the 16:9 frame is shown whole, over a blurred and darkened copy of itself. These two controls shape that backdrop." Style="{StaticResource NoteText}"/>
+                            </Border>
+                        </StackPanel>
+
+                        <!-- EXPORT -->
                         <StackPanel x:Name="SectionExport" Visibility="Collapsed">
-                            <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="112"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="Quality mode" Foreground="#B9C1D0"/><ComboBox x:Name="QualityCombo" Grid.Column="1" SelectedIndex="3"><ComboBoxItem Content="Compact"/><ComboBoxItem Content="Balanced"/><ComboBoxItem Content="High"/><ComboBoxItem Content="YouTube"/></ComboBox></Grid>
-                            <Grid Margin="0,6"><Grid.ColumnDefinitions><ColumnDefinition Width="112"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="Output format" Foreground="#B9C1D0"/><TextBlock Grid.Column="1" Text="1080p / H.264 / 24 FPS"/></Grid>
-                            <Grid Margin="0,6"><Grid.ColumnDefinitions><ColumnDefinition Width="112"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="Estimated size" Foreground="#B9C1D0"/><TextBlock x:Name="EstimateText" Grid.Column="1" Text="Scan voiceover first" Foreground="#22C7E8"/></Grid>
-                            <TextBlock Text="Final output" Foreground="#94A0B5" FontSize="11" Margin="0,10,0,0"/>
-                            <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBox x:Name="OutputText"/><Button x:Name="BrowseOutputButton" Grid.Column="1" Content="Save As"/></Grid>
+                            <Grid Margin="0,3"><Grid.ColumnDefinitions><ColumnDefinition Width="104"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                <TextBlock Text="Quality" Style="{StaticResource RowLabel}"/>
+                                <ComboBox x:Name="QualityCombo" Grid.Column="1" SelectedIndex="3">
+                                    <ComboBoxItem Content="Compact"/><ComboBoxItem Content="Balanced"/><ComboBoxItem Content="High"/><ComboBoxItem Content="YouTube"/>
+                                </ComboBox></Grid>
+                            <Grid Margin="0,9"><Grid.ColumnDefinitions><ColumnDefinition Width="104"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                <TextBlock Text="Format" Style="{StaticResource RowLabel}"/>
+                                <TextBlock Grid.Column="1" Text="1080p  H.264  24 fps" Foreground="{StaticResource DimBrush}" FontFamily="Consolas" FontSize="11.5"/></Grid>
+                            <Grid Margin="0,3"><Grid.ColumnDefinitions><ColumnDefinition Width="104"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                <TextBlock Text="Estimated size" Style="{StaticResource RowLabel}"/>
+                                <TextBlock x:Name="EstimateText" Grid.Column="1" Text="Scan voiceover first" Foreground="{StaticResource AccentBrush}" FontSize="12"/></Grid>
+                            <TextBlock Text="Save to" Style="{StaticResource LabelText}" Margin="0,16,0,5"/>
+                            <Grid>
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                <TextBox x:Name="OutputText"/>
+                                <Button x:Name="BrowseOutputButton" Grid.Column="1" Content="Save as" Style="{StaticResource QuietButtonStyle}" Margin="6,0,0,0"/>
+                            </Grid>
                         </StackPanel>
 
                     </Grid>
@@ -339,18 +777,27 @@ $xaml = @'
             </Grid>
         </Border>
 
-        <Border x:Name="StatusPanel" Grid.Row="2" Grid.ColumnSpan="3" Background="#0B1019" BorderBrush="#252D3D" BorderThickness="0,1,0,0">
+        <!-- FOOTER -->
+        <Border x:Name="StatusPanel" Grid.Row="2" Grid.ColumnSpan="3" Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource LineBrush}" BorderThickness="0,1,0,0">
             <Grid Margin="16,0">
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                <StackPanel VerticalAlignment="Center" Margin="0,0,20,0">
-                    <TextBlock x:Name="StatusText" Text="Ready to create" FontSize="14" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
-                    <ProgressBar x:Name="RenderProgress" Height="8" Minimum="0" Maximum="100" Value="0" Foreground="#8B5CF6" Background="#20293A" Margin="0,7,0,0"/>
+                <StackPanel VerticalAlignment="Center" Margin="0,0,24,0">
+                    <Grid>
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                        <TextBlock x:Name="StatusText" Text="Ready to create" FontSize="12.5" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                        <!-- What is still missing, rather than a button that is
+                             simply greyed out with no reason given. -->
+                        <StackPanel x:Name="ReadinessPanel" Grid.Column="1" Orientation="Horizontal" Margin="16,0,0,0"/>
+                        <TextBlock x:Name="RenderEtaText" Grid.Column="2" Text="" Foreground="{StaticResource DimBrush}" FontFamily="Consolas" FontSize="11.5"/>
+                    </Grid>
+                    <ProgressBar x:Name="RenderProgress" Height="5" Minimum="0" Maximum="100" Value="0" Margin="0,8,0,0"/>
+                    <TextBlock x:Name="RenderDetailText" Text="" Foreground="{StaticResource MutedBrush}" FontSize="10.5" Margin="0,5,0,0"/>
                 </StackPanel>
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                    <Button x:Name="PreviewButton" Content="60s Preview" Style="{StaticResource PrimaryButtonStyle}" MinWidth="118"/>
-                    <Button x:Name="FinalButton" Content="Render Final" Style="{StaticResource CyanButtonStyle}" MinWidth="126" IsEnabled="False"/>
-                    <Button x:Name="CancelButton" Content="Cancel" Background="#5C2430" BorderBrush="#9B4053" IsEnabled="False"/>
-                    <Button x:Name="OpenFolderButton" Content="Open Folder" IsEnabled="False"/>
+                    <Button x:Name="PreviewButton" Content="Preview 60s" Style="{StaticResource QuietButtonStyle}" MinWidth="104"/>
+                    <Button x:Name="FinalButton" Content="Render final" Style="{StaticResource PrimaryButtonStyle}" MinWidth="122" IsEnabled="False"/>
+                    <Button x:Name="CancelButton" Content="Cancel" Style="{StaticResource DangerButtonStyle}" IsEnabled="False"/>
+                    <Button x:Name="OpenFolderButton" Content="Open folder" Style="{StaticResource QuietButtonStyle}" IsEnabled="False"/>
                 </StackPanel>
             </Grid>
         </Border>
@@ -391,7 +838,23 @@ $controlNames = @(
     'SeekSlider', 'TimeText', 'VolumeSlider', 'FullScreenButton',
     'StoryboardPanel', 'StoryboardSummaryText',
     'StatusText', 'PreviewButton', 'FinalButton', 'CancelButton',
-    'OpenFolderButton', 'RenderProgress'
+    'OpenFolderButton', 'RenderProgress',
+    # Each workflow step reports its own state, so the rail shows what is set
+    # and what is not without anyone having to click through all five.
+    'NavMediaBadge', 'NavMediaBadgeText', 'NavMediaSummaryText',
+    'NavMotionBadge', 'NavMotionBadgeText', 'NavMotionSummaryText',
+    'NavCaptionsBadge', 'NavCaptionsBadgeText', 'NavCaptionsSummaryText',
+    'NavBlankingBadge', 'NavBlankingBadgeText', 'NavBlankingSummaryText',
+    'NavExportBadge', 'NavExportBadgeText', 'NavExportSummaryText',
+    'HistoryCountBadge', 'HistoryCountText',
+    # What was actually found behind each chosen path.
+    'ImageSummaryText', 'AudioSummaryText', 'WatermarkSummaryText',
+    # Caption mode and preset are chosen from buttons and swatches now.
+    'CaptionModePanel', 'CaptionPresetSwatchPanel',
+    'CaptionTabTypeButton', 'CaptionTabColourButton', 'CaptionTabPositionButton',
+    'CaptionGroupType', 'CaptionGroupColour', 'CaptionGroupPosition',
+    # A long render needs a finish time, not a percentage.
+    'ReadinessPanel', 'RenderEtaText', 'RenderDetailText'
 )
 foreach ($name in $controlNames) {
     $control = $window.FindName($name)
@@ -404,31 +867,96 @@ foreach ($name in $controlNames) {
 # The left rail switches which settings section is visible. Each entry carries
 # the section panel, its nav button, and the heading shown above the panel.
 $script:SettingsSections = [ordered]@{
-    'Media'    = @{ Panel = $SectionMedia;    Button = $NavMediaButton;    Title = 'Media and Audio'; Hint = 'Pick the photographs, the voiceover, and the watermark clip.' }
-    'Motion'   = @{ Panel = $SectionMotion;   Button = $NavMotionButton;   Title = 'Motion';          Hint = 'How long each image holds, and how far it zooms.' }
-    'Captions' = @{ Panel = $SectionCaptions; Button = $NavCaptionsButton; Title = 'Captions';        Hint = 'Generated locally from the voiceover. Style updates the player instantly.' }
-    'Blanking' = @{ Panel = $SectionBlanking; Button = $NavBlankingButton; Title = 'Blanking Fill';   Hint = 'The blurred backdrop behind images that do not fill the frame.' }
-    'Export'   = @{ Panel = $SectionExport;   Button = $NavExportButton;   Title = 'Export';          Hint = 'Quality target and where the finished MP4 is written.' }
+    'Media'    = @{ Panel = $SectionMedia;    Button = $NavMediaButton;    Badge = $NavMediaBadge;    BadgeText = $NavMediaBadgeText;    Summary = $NavMediaSummaryText;    Step = '1'; Title = 'Source';   Hint = 'The photographs, the voiceover, and the overlay clip that screens over the top.' }
+    'Motion'   = @{ Panel = $SectionMotion;   Button = $NavMotionButton;   Badge = $NavMotionBadge;   BadgeText = $NavMotionBadgeText;   Summary = $NavMotionSummaryText;   Step = '2'; Title = 'Motion';   Hint = 'How long each image holds, and how far it zooms.' }
+    'Captions' = @{ Panel = $SectionCaptions; Button = $NavCaptionsButton; Badge = $NavCaptionsBadge; BadgeText = $NavCaptionsBadgeText; Summary = $NavCaptionsSummaryText; Step = '3'; Title = 'Captions'; Hint = 'Generated from the voiceover on this computer. Nothing is uploaded.' }
+    'Blanking' = @{ Panel = $SectionBlanking; Button = $NavBlankingButton; Badge = $NavBlankingBadge; BadgeText = $NavBlankingBadgeText; Summary = $NavBlankingSummaryText; Step = '4'; Title = 'Backdrop'; Hint = 'The blurred fill behind a photograph that does not reach the edges of the frame.' }
+    'Export'   = @{ Panel = $SectionExport;   Button = $NavExportButton;   Badge = $NavExportBadge;   BadgeText = $NavExportBadgeText;   Summary = $NavExportSummaryText;   Step = '5'; Title = 'Export';   Hint = 'Quality target and where the finished MP4 is written.' }
 }
-$script:ActiveSectionBrush = [Windows.Media.BrushConverter]::new().ConvertFromString('#251A43')
-$script:ActiveSectionBorderBrush = [Windows.Media.BrushConverter]::new().ConvertFromString('#6D46BE')
+
+function New-ToolBrush {
+    param([string]$Hex)
+    return [Windows.Media.BrushConverter]::new().ConvertFromString($Hex)
+}
+
+# The one saturated colour in the window, and the greys it sits on. Kept in one
+# place so the palette cannot drift as handlers are added.
+$script:AccentBrush = New-ToolBrush '#E0913F'
+$script:AccentTintBrush = New-ToolBrush '#2A2119'
+$script:AccentDeepBrush = New-ToolBrush '#8A5424'
+$script:OkBrush = New-ToolBrush '#7CA97C'
+$script:OkTintBrush = New-ToolBrush '#1D241D'
+$script:TextBrush = New-ToolBrush '#E9E9E6'
+$script:DimBrush = New-ToolBrush '#A3A39E'
+$script:MutedBrush = New-ToolBrush '#7E7E7A'
+$script:StrongLineBrush = New-ToolBrush '#41414A'
+$script:StepBadgeInk = New-ToolBrush '#1C1206'
 $script:TransparentBrush = [Windows.Media.Brushes]::Transparent
+
+function Set-StepComplete {
+    # A step reports itself done with a tick and a green badge, or unfinished
+    # with its number. The active step overrides both, because where you are
+    # matters more on the rail than what you have already settled.
+    param([string]$Name, [bool]$Complete, [string]$Summary)
+    if (-not $script:SettingsSections.Contains($Name)) { return }
+    $entry = $script:SettingsSections[$Name]
+    $entry.Complete = $Complete
+    if ($PSBoundParameters.ContainsKey('Summary')) {
+        $entry.Summary.Text = $Summary
+    }
+    if ($script:ActiveSection -ne $Name) { Update-StepBadge -Name $Name }
+}
+
+function Update-StepBadge {
+    param([string]$Name)
+    $entry = $script:SettingsSections[$Name]
+    $isActive = ($script:ActiveSection -eq $Name)
+    $isComplete = [bool](Get-OptionalHashValue -Table $entry -Key 'Complete')
+
+    if ($isActive) {
+        $entry.Badge.Background = $script:AccentBrush
+        $entry.Badge.BorderBrush = $script:AccentBrush
+        $entry.BadgeText.Foreground = $script:StepBadgeInk
+        $entry.BadgeText.Text = [string]$entry.Step
+    }
+    elseif ($isComplete) {
+        $entry.Badge.Background = $script:OkTintBrush
+        $entry.Badge.BorderBrush = $script:OkBrush
+        $entry.BadgeText.Foreground = $script:OkBrush
+        # A tick rather than the number: the number answers "where am I", and
+        # once a step is behind you that is no longer the question.
+        $entry.BadgeText.Text = [char]0x2713
+    }
+    else {
+        $entry.Badge.Background = $script:TransparentBrush
+        $entry.Badge.BorderBrush = $script:StrongLineBrush
+        $entry.BadgeText.Foreground = $script:MutedBrush
+        $entry.BadgeText.Text = [string]$entry.Step
+    }
+}
+
+function Get-OptionalHashValue {
+    param([hashtable]$Table, [string]$Key)
+    if ($Table.ContainsKey($Key)) { return $Table[$Key] }
+    return $null
+}
 
 function Set-ActiveSection {
     param([Parameter(Mandatory = $true)][string]$Name)
     if (-not $script:SettingsSections.Contains($Name)) { return }
+    $script:ActiveSection = $Name
     foreach ($key in $script:SettingsSections.Keys) {
         $entry = $script:SettingsSections[$key]
         $isActive = ($key -eq $Name)
         $entry.Panel.Visibility = if ($isActive) { 'Visible' } else { 'Collapsed' }
-        $entry.Button.Background = if ($isActive) { $script:ActiveSectionBrush } else { $script:TransparentBrush }
-        $entry.Button.BorderBrush = if ($isActive) { $script:ActiveSectionBorderBrush } else { $script:TransparentBrush }
+        $entry.Button.Background = if ($isActive) { $script:AccentTintBrush } else { $script:TransparentBrush }
+        $entry.Button.BorderBrush = if ($isActive) { $script:AccentDeepBrush } else { $script:TransparentBrush }
         $entry.Button.FontWeight = if ($isActive) { 'SemiBold' } else { 'Normal' }
+        Update-StepBadge -Name $key
     }
     $active = $script:SettingsSections[$Name]
     $SectionTitleText.Text = [string]$active.Title
     $SectionHintText.Text = [string]$active.Hint
-    $script:ActiveSection = $Name
 }
 
 $script:IsLoading = $true
@@ -671,6 +1199,114 @@ function Update-CaptionControlLabels {
     $CaptionMaxWidthValueText.Text = "$([int][Math]::Round($CaptionMaxWidthSlider.Value))%"
     $CaptionWordsPerLineValueText.Text = [string][int][Math]::Round($CaptionWordsPerLineSlider.Value)
     $CaptionLineSpacingValueText.Text = ([double]$CaptionLineSpacingSlider.Value).ToString('0.00')
+}
+
+function Build-CaptionModeButtons {
+    # Four buttons instead of a dropdown. The combo box behind them is still the
+    # value everything else reads; these only move its selection, which is why
+    # no other handler had to change.
+    $labels = @('Off', 'File only', 'On video', 'Both')
+    $CaptionModePanel.Children.Clear()
+    for ($index = 0; $index -lt $labels.Count; $index++) {
+        $button = [Windows.Controls.Button]::new()
+        $button.Content = $labels[$index]
+        $button.Style = $window.FindResource('TabButtonStyle')
+        $button.Tag = $index
+        $button.Add_Click({
+            param($sender, $eventArgs)
+            $CaptionModeCombo.SelectedIndex = [int]$sender.Tag
+        }.GetNewClosure())
+        [void]$CaptionModePanel.Children.Add($button)
+    }
+    Update-CaptionModeButtons
+}
+
+function Update-CaptionModeButtons {
+    $selected = [int]$CaptionModeCombo.SelectedIndex
+    foreach ($child in $CaptionModePanel.Children) {
+        $isOn = ([int]$child.Tag -eq $selected)
+        $child.Background = if ($isOn) { $script:AccentTintBrush } else { $script:TransparentBrush }
+        $child.Foreground = if ($isOn) { $script:TextBrush } else { $script:MutedBrush }
+        $child.FontWeight = if ($isOn) { 'SemiBold' } else { 'Normal' }
+    }
+}
+
+function Build-CaptionPresetSwatches {
+    # Each swatch is drawn from the preset's own values, so it shows the result
+    # rather than a name. "1. Clean YouTube" through "10. Compact Broadcast"
+    # told you nothing about what you were choosing between.
+    $shortNames = @('Clean', 'News', 'Shadow', 'Box', 'Headline', 'Accent', 'Doc', 'Emphasis', 'Upper', 'Broadcast')
+    $CaptionPresetSwatchPanel.Children.Clear()
+    for ($index = 0; $index -lt $shortNames.Count; $index++) {
+        $presetLabel = [string]$CaptionPresetCombo.Items[$index].Content
+        $values = Get-CaptionPresetDefaults -Preset $presetLabel
+
+        $sample = [Windows.Controls.TextBlock]::new()
+        $sample.Text = 'Aa'
+        $sample.FontFamily = [Windows.Media.FontFamily]::new([string]$values.Font)
+        $sample.FontSize = 13
+        $sample.FontWeight = if ($values.Bold) { 'Bold' } else { 'Normal' }
+        $sample.Foreground = New-ToolBrush ([string]$values.Text)
+        $sample.HorizontalAlignment = 'Center'
+        $sample.Padding = [Windows.Thickness]::new(4, 0, 4, 0)
+        if ([double]$values.BackgroundOpacity -gt 0) {
+            $sample.Background = New-ToolBrush ([string]$values.Background)
+            $sample.Opacity = 1.0
+        }
+
+        $caption = [Windows.Controls.TextBlock]::new()
+        $caption.Text = $shortNames[$index]
+        $caption.FontSize = 9
+        $caption.Foreground = $script:MutedBrush
+        $caption.HorizontalAlignment = 'Center'
+        $caption.Margin = [Windows.Thickness]::new(0, 2, 0, 0)
+
+        $stack = [Windows.Controls.StackPanel]::new()
+        [void]$stack.Children.Add($sample)
+        [void]$stack.Children.Add($caption)
+
+        $button = [Windows.Controls.Button]::new()
+        $button.Content = $stack
+        $button.Height = 46
+        $button.Margin = [Windows.Thickness]::new(0, 0, 5, 5)
+        $button.Padding = [Windows.Thickness]::new(0)
+        $button.Tag = $index
+        $button.ToolTip = $presetLabel
+        $button.Add_Click({
+            param($sender, $eventArgs)
+            $CaptionPresetCombo.SelectedIndex = [int]$sender.Tag
+        }.GetNewClosure())
+        [void]$CaptionPresetSwatchPanel.Children.Add($button)
+    }
+    Update-CaptionPresetSwatches
+}
+
+function Update-CaptionPresetSwatches {
+    $selected = [int]$CaptionPresetCombo.SelectedIndex
+    foreach ($child in $CaptionPresetSwatchPanel.Children) {
+        $isOn = ([int]$child.Tag -eq $selected)
+        $child.BorderBrush = if ($isOn) { $script:AccentBrush } else { (New-ToolBrush '#33333A') }
+        $child.Background = if ($isOn) { $script:AccentTintBrush } else { (New-ToolBrush '#101012') }
+    }
+}
+
+function Set-CaptionTab {
+    # Font, colour and placement are three separate jobs. Showing all twenty
+    # controls at once made the panel a scroll rather than a set of choices.
+    param([string]$Name)
+    $script:CaptionTab = $Name
+    $tabs = @{
+        'Type'     = @{ Button = $CaptionTabTypeButton;     Group = $CaptionGroupType }
+        'Colour'   = @{ Button = $CaptionTabColourButton;   Group = $CaptionGroupColour }
+        'Position' = @{ Button = $CaptionTabPositionButton; Group = $CaptionGroupPosition }
+    }
+    foreach ($key in $tabs.Keys) {
+        $isOn = ($key -eq $Name)
+        $tabs[$key].Group.Visibility = if ($isOn) { 'Visible' } else { 'Collapsed' }
+        $tabs[$key].Button.Background = if ($isOn) { $script:AccentTintBrush } else { $script:TransparentBrush }
+        $tabs[$key].Button.Foreground = if ($isOn) { $script:TextBrush } else { $script:MutedBrush }
+        $tabs[$key].Button.FontWeight = if ($isOn) { 'SemiBold' } else { 'Normal' }
+    }
 }
 
 function Apply-CaptionPresetToControls {
@@ -1308,6 +1944,182 @@ function Update-SettingLabels {
     $BrightnessValueText.Text = "$([int]$BrightnessSlider.Value)%"
 }
 
+function Format-Clock {
+    param([double]$Seconds)
+    if ($Seconds -le 0) { return '' }
+    $span = [TimeSpan]::FromSeconds([Math]::Round($Seconds))
+    if ($span.TotalHours -ge 1) { return ('{0}:{1:00}:{2:00}' -f [int]$span.TotalHours, $span.Minutes, $span.Seconds) }
+    return ('{0}:{1:00}' -f [int]$span.TotalMinutes, $span.Seconds)
+}
+
+function Format-ByteSize {
+    param([double]$Bytes)
+    if ($Bytes -ge 1GB) { return ('{0:N1} GB' -f ($Bytes / 1GB)) }
+    if ($Bytes -ge 1MB) { return ('{0:N0} MB' -f ($Bytes / 1MB)) }
+    return ('{0:N0} KB' -f ($Bytes / 1KB))
+}
+
+function Get-SourceSummaries {
+    # Reports what is actually behind each chosen path. Three text boxes holding
+    # three paths told nobody whether the folder had four photographs or four
+    # hundred, and that only surfaced at render time.
+    $result = [ordered]@{
+        ImageCount = 0
+        ImageText = 'No folder chosen'
+        AudioText = 'No voiceover chosen'
+        AudioReady = $false
+        WatermarkText = 'No overlay chosen'
+        WatermarkReady = $false
+    }
+
+    $folder = [string]$ImageFolderText.Text
+    if (-not [string]::IsNullOrWhiteSpace($folder)) {
+        if (Test-Path -LiteralPath $folder -PathType Container) {
+            try {
+                $files = @(Get-SupportedImageFiles -Folder $folder)
+                $result.ImageCount = $files.Count
+                if ($files.Count -eq 0) {
+                    $result.ImageText = 'No usable photographs in this folder'
+                }
+                else {
+                    $bytes = 0.0
+                    $extensions = [Collections.Generic.HashSet[string]]::new()
+                    foreach ($file in $files) {
+                        try {
+                            $item = Get-Item -LiteralPath $file -ErrorAction Stop
+                            $bytes += [double]$item.Length
+                            [void]$extensions.Add($item.Extension.TrimStart('.').ToUpperInvariant())
+                        }
+                        catch {}
+                    }
+                    $kinds = (@($extensions) | Sort-Object) -join ', '
+                    $result.ImageText = "$($files.Count) photographs, $(Format-ByteSize $bytes), $kinds"
+                }
+            }
+            catch {
+                $result.ImageText = 'That folder could not be read'
+            }
+        }
+        else {
+            $result.ImageText = 'That folder no longer exists'
+        }
+    }
+
+    $audio = [string]$AudioText.Text
+    if (-not [string]::IsNullOrWhiteSpace($audio)) {
+        if (Test-Path -LiteralPath $audio -PathType Leaf) {
+            $result.AudioReady = $true
+            $name = Split-Path -Leaf $audio
+            if ($script:AudioDurationSeconds -gt 0) {
+                $result.AudioText = "$name, $(Format-Clock $script:AudioDurationSeconds) long"
+            }
+            else {
+                $result.AudioText = "$name, length measured at preview"
+            }
+        }
+        else {
+            $result.AudioText = 'That voiceover no longer exists'
+        }
+    }
+
+    $watermark = [string]$WatermarkText.Text
+    if (-not [string]::IsNullOrWhiteSpace($watermark)) {
+        if (Test-Path -LiteralPath $watermark -PathType Leaf) {
+            $result.WatermarkReady = $true
+            $result.WatermarkText = "$(Split-Path -Leaf $watermark), loops for the whole video"
+        }
+        else {
+            $result.WatermarkText = 'That overlay clip no longer exists'
+        }
+    }
+
+    return $result
+}
+
+function Add-ReadinessCheck {
+    param([string]$Label, [bool]$Done)
+    $panel = [Windows.Controls.StackPanel]::new()
+    $panel.Orientation = 'Horizontal'
+    $panel.Margin = [Windows.Thickness]::new(0, 0, 14, 0)
+
+    $mark = [Windows.Controls.TextBlock]::new()
+    $mark.Text = if ($Done) { [char]0x2713 } else { [char]0x25CF }
+    $mark.Foreground = if ($Done) { $script:OkBrush } else { $script:AccentBrush }
+    $mark.FontSize = 11
+    $mark.Margin = [Windows.Thickness]::new(0, 0, 5, 0)
+    [void]$panel.Children.Add($mark)
+
+    $text = [Windows.Controls.TextBlock]::new()
+    $text.Text = $Label
+    $text.Foreground = if ($Done) { $script:MutedBrush } else { $script:DimBrush }
+    $text.FontSize = 11
+    [void]$panel.Children.Add($text)
+
+    [void]$ReadinessPanel.Children.Add($panel)
+}
+
+function Update-WorkflowState {
+    # Recomputes every step summary, every badge and the readiness line from the
+    # current controls. Called wherever a choice changes, so the rail and the
+    # footer can never disagree with what is actually set.
+    if ($script:IsLoading) { return }
+
+    $summaries = Get-SourceSummaries
+    $ImageSummaryText.Text = [string]$summaries.ImageText
+    $AudioSummaryText.Text = [string]$summaries.AudioText
+    $WatermarkSummaryText.Text = [string]$summaries.WatermarkText
+
+    $hasImages = ([int]$summaries.ImageCount -gt 0)
+    $hasAudio = [bool]$summaries.AudioReady
+    if ($hasImages -and $hasAudio) {
+        $sourceSummary = "$($summaries.ImageCount) photos, $(Format-Clock $script:AudioDurationSeconds) voiceover"
+        if ($script:AudioDurationSeconds -le 0) { $sourceSummary = "$($summaries.ImageCount) photos, voiceover ready" }
+    }
+    elseif ($hasImages) { $sourceSummary = "$($summaries.ImageCount) photos, no voiceover yet" }
+    elseif ($hasAudio) { $sourceSummary = 'Voiceover ready, no photos yet' }
+    else { $sourceSummary = 'Nothing chosen yet' }
+    Set-StepComplete -Name 'Media' -Complete ($hasImages -and $hasAudio) -Summary $sourceSummary
+
+    Set-StepComplete -Name 'Motion' -Complete $true -Summary "$($MinimumDurationText.Text)-$($MaximumDurationText.Text)s holds, $($ZoomText.Text)% zoom"
+
+    $captionMode = Get-ComboText $CaptionModeCombo
+    $captionsDone = $true
+    if ($captionMode -eq 'Off') { $captionSummary = 'Off' }
+    else {
+        $hasFile = (-not [string]::IsNullOrWhiteSpace([string]$script:CaptionPath)) -and (Test-Path -LiteralPath ([string]$script:CaptionPath) -PathType Leaf)
+        $captionsDone = $hasFile
+        $preset = (Get-ComboText $CaptionPresetCombo) -replace '^\d+\.\s*', ''
+        $captionSummary = if ($hasFile) { "$captionMode, $preset" } else { "$captionMode, not generated yet" }
+    }
+    Set-StepComplete -Name 'Captions' -Complete $captionsDone -Summary $captionSummary
+
+    Set-StepComplete -Name 'Blanking' -Complete $true -Summary "Blur $([int]$BlurSlider.Value), $([int]$BrightnessSlider.Value)% bright"
+
+    $output = [string]$OutputText.Text
+    $hasOutput = -not [string]::IsNullOrWhiteSpace($output)
+    $exportSummary = if ($hasOutput) { "$(Get-ComboText $QualityCombo), $(Split-Path -Leaf $output)" } else { 'No destination chosen' }
+    Set-StepComplete -Name 'Export' -Complete $hasOutput -Summary $exportSummary
+
+    # The footer says what is still missing rather than presenting a disabled
+    # button with no explanation.
+    $ReadinessPanel.Children.Clear()
+    # While a render is running the footer belongs to its progress, not to a
+    # checklist of things that are already settled.
+    if ($null -ne $script:RenderState) { return }
+    $missing = 0
+    foreach ($check in @(
+            @{ Label = 'Photos'; Done = $hasImages },
+            @{ Label = 'Voiceover'; Done = $hasAudio },
+            @{ Label = 'Captions'; Done = $captionsDone },
+            @{ Label = 'Destination'; Done = $hasOutput })) {
+        if (-not $check.Done) { $missing++ }
+        Add-ReadinessCheck -Label ([string]$check.Label) -Done ([bool]$check.Done)
+    }
+    if ($missing -eq 0 -and -not $script:PreviewValid) {
+        $StatusText.Text = 'Ready. Generate a preview first.'
+    }
+}
+
 function Update-Estimate {
     if ($script:AudioDurationSeconds -le 0) {
         $EstimateText.Text = 'Available after voiceover scan'
@@ -1617,9 +2429,28 @@ function Set-RenderControls {
     if ($Rendering) {
         $FinalButton.IsEnabled = $false
         $OpenFolderButton.IsEnabled = $false
+        # Stamped in one place rather than in each of the five render states, so
+        # every kind of render can report a finish time without them all having
+        # to remember to record when they began.
+        if ($null -ne $script:RenderState) {
+            if ($script:RenderState.PSObject.Properties['StartedUtc']) { $script:RenderState.StartedUtc = [DateTime]::UtcNow }
+            else { $script:RenderState | Add-Member -NotePropertyName StartedUtc -NotePropertyValue ([DateTime]::UtcNow) }
+            # Only the already-decided value. Asking for it here would run the
+            # encoder session probe on the interface thread and freeze the
+            # window for several seconds at the start of every preview.
+            if ($null -ne $script:RecommendedParallelSegments) {
+                $lanes = [int]$script:RecommendedParallelSegments
+                if ($script:RenderState.PSObject.Properties['Lanes']) { $script:RenderState.Lanes = $lanes }
+                else { $script:RenderState | Add-Member -NotePropertyName Lanes -NotePropertyValue $lanes }
+            }
+        }
+        if ($null -ne $ReadinessPanel) { $ReadinessPanel.Children.Clear() }
     }
     else {
         $FinalButton.IsEnabled = $script:PreviewValid
+        if ($null -ne $RenderEtaText) { $RenderEtaText.Text = '' }
+        if ($null -ne $RenderDetailText) { $RenderDetailText.Text = '' }
+        Update-WorkflowState
     }
 }
 
@@ -2008,25 +2839,25 @@ function Show-CaptionEditor {
         $editorXaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Caption Editor" Width="1080" Height="700" MinWidth="850" MinHeight="560" WindowStartupLocation="CenterOwner"
-        Background="#0B1019" Foreground="White" FontFamily="Segoe UI">
+        Background="#17171A" Foreground="White" FontFamily="Segoe UI">
     <Window.Resources>
         <Style TargetType="TextBlock"><Setter Property="Foreground" Value="White"/></Style>
-        <Style TargetType="Button"><Setter Property="Background" Value="#20293A"/><Setter Property="Foreground" Value="White"/><Setter Property="BorderBrush" Value="#3B4860"/><Setter Property="Padding" Value="12,7"/><Setter Property="Margin" Value="3"/></Style>
-        <Style TargetType="TextBox"><Setter Property="Background" Value="#111827"/><Setter Property="Foreground" Value="White"/><Setter Property="BorderBrush" Value="#354158"/><Setter Property="Padding" Value="7"/><Setter Property="Margin" Value="3"/></Style>
+        <Style TargetType="Button"><Setter Property="Background" Value="#26262B"/><Setter Property="Foreground" Value="White"/><Setter Property="BorderBrush" Value="#41414A"/><Setter Property="Padding" Value="12,7"/><Setter Property="Margin" Value="3"/></Style>
+        <Style TargetType="TextBox"><Setter Property="Background" Value="#E9E9E6"/><Setter Property="Foreground" Value="White"/><Setter Property="BorderBrush" Value="#41414A"/><Setter Property="Padding" Value="7"/><Setter Property="Margin" Value="3"/></Style>
         <!-- DataGrid's default row template uses a white alternate row.  Set
              every layer explicitly so white caption text stays readable. -->
-        <Style TargetType="DataGridColumnHeader"><Setter Property="Background" Value="#1B2433"/><Setter Property="Foreground" Value="White"/><Setter Property="BorderBrush" Value="#354158"/><Setter Property="Padding" Value="8,7"/></Style>
-        <Style TargetType="DataGridCell"><Setter Property="Background" Value="Transparent"/><Setter Property="Foreground" Value="White"/><Setter Property="BorderBrush" Value="#263043"/><Setter Property="VerticalContentAlignment" Value="Center"/><Setter Property="Padding" Value="7,3"/></Style>
-        <Style TargetType="DataGridRow"><Setter Property="Background" Value="#0F1520"/><Setter Property="Foreground" Value="White"/><Setter Property="VerticalContentAlignment" Value="Center"/><Style.Triggers><Trigger Property="ItemsControl.AlternationIndex" Value="1"><Setter Property="Background" Value="#141B27"/></Trigger><Trigger Property="IsSelected" Value="True"><Setter Property="Background" Value="#30244F"/></Trigger></Style.Triggers></Style>
+        <Style TargetType="DataGridColumnHeader"><Setter Property="Background" Value="#26262B"/><Setter Property="Foreground" Value="White"/><Setter Property="BorderBrush" Value="#41414A"/><Setter Property="Padding" Value="8,7"/></Style>
+        <Style TargetType="DataGridCell"><Setter Property="Background" Value="Transparent"/><Setter Property="Foreground" Value="White"/><Setter Property="BorderBrush" Value="#33333A"/><Setter Property="VerticalContentAlignment" Value="Center"/><Setter Property="Padding" Value="7,3"/></Style>
+        <Style TargetType="DataGridRow"><Setter Property="Background" Value="#101012"/><Setter Property="Foreground" Value="White"/><Setter Property="VerticalContentAlignment" Value="Center"/><Style.Triggers><Trigger Property="ItemsControl.AlternationIndex" Value="1"><Setter Property="Background" Value="#1E1E22"/></Trigger><Trigger Property="IsSelected" Value="True"><Setter Property="Background" Value="#2A2119"/></Trigger></Style.Triggers></Style>
     </Window.Resources>
     <Grid Margin="14">
         <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
         <Grid>
             <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-            <StackPanel><TextBlock Text="Caption Editor" FontSize="22" FontWeight="SemiBold"/><TextBlock Text="Changes appear live on the main player. You can use its Play, Pause, seek, style controls, and drag handles while this editor is open." Foreground="#8C98AD" Margin="0,4,0,10" TextWrapping="Wrap"/></StackPanel>
-            <Button x:Name="PreviewCaptionButton" Grid.Column="1" Content="Play Selected Caption" VerticalAlignment="Top" Background="#34245B"/>
+            <StackPanel><TextBlock Text="Caption Editor" FontSize="22" FontWeight="SemiBold"/><TextBlock Text="Changes appear live on the main player. You can use its Play, Pause, seek, style controls, and drag handles while this editor is open." Foreground="#7E7E7A" Margin="0,4,0,10" TextWrapping="Wrap"/></StackPanel>
+            <Button x:Name="PreviewCaptionButton" Grid.Column="1" Content="Play Selected Caption" VerticalAlignment="Top" Background="#2A2119"/>
         </Grid>
-        <Border Grid.Row="1" Background="#151C28" BorderBrush="#2C3649" BorderThickness="1" CornerRadius="7" Padding="8" Margin="0,0,0,10">
+        <Border Grid.Row="1" Background="#1E1E22" BorderBrush="#33333A" BorderThickness="1" CornerRadius="7" Padding="8" Margin="0,0,0,10">
             <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                 <TextBox x:Name="FindText" ToolTip="Text to find"/>
                 <TextBox x:Name="ReplaceText" Grid.Column="1" ToolTip="Replacement text"/>
@@ -2034,12 +2865,12 @@ function Show-CaptionEditor {
                 <Button x:Name="AddCaptionButton" Grid.Column="3" Content="Add Row"/>
                 <Button x:Name="SplitCaptionButton" Grid.Column="4" Content="Split"/>
                 <Button x:Name="MergeCaptionButton" Grid.Column="5" Content="Merge Next"/>
-                <Button x:Name="DeleteCaptionButton" Grid.Column="6" Content="Delete" Background="#542735"/>
+                <Button x:Name="DeleteCaptionButton" Grid.Column="6" Content="Delete" Background="#5A3A38"/>
             </Grid>
         </Border>
         <DataGrid x:Name="CaptionGrid" Grid.Row="2" AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False"
-                  HeadersVisibility="Column" GridLinesVisibility="Horizontal" RowHeight="44" AlternationCount="2" Background="#0F1520" Foreground="White"
-                  BorderBrush="#303A4D" HorizontalGridLinesBrush="#263043" AlternatingRowBackground="#141B27"
+                  HeadersVisibility="Column" GridLinesVisibility="Horizontal" RowHeight="44" AlternationCount="2" Background="#101012" Foreground="White"
+                  BorderBrush="#33333A" HorizontalGridLinesBrush="#33333A" AlternatingRowBackground="#1E1E22"
                   SelectionMode="Single" SelectionUnit="FullRow">
             <DataGrid.Columns>
                 <DataGridTextColumn Header="#" Binding="{Binding Number}" Width="45" IsReadOnly="True"/>
@@ -2050,8 +2881,8 @@ function Show-CaptionEditor {
         </DataGrid>
         <Grid Grid.Row="3" Margin="0,10,0,0">
             <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-            <TextBlock x:Name="EditorStatus" Text="Ready" Foreground="#8C98AD"/>
-            <StackPanel Grid.Column="1" Orientation="Horizontal"><Button x:Name="CancelEditorButton" Content="Cancel"/><Button x:Name="SaveEditorButton" Content="Save Captions" Background="#7C3AED" BorderBrush="#9B70F7" FontWeight="SemiBold"/></StackPanel>
+            <TextBlock x:Name="EditorStatus" Text="Ready" Foreground="#7E7E7A"/>
+            <StackPanel Grid.Column="1" Orientation="Horizontal"><Button x:Name="CancelEditorButton" Content="Cancel"/><Button x:Name="SaveEditorButton" Content="Save Captions" Background="#E0913F" BorderBrush="#E0913F" FontWeight="SemiBold"/></StackPanel>
         </Grid>
     </Grid>
 </Window>
@@ -2428,16 +3259,16 @@ function Show-RenderHistory {
     $historyXaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Render History" Width="1050" Height="650" MinWidth="820" MinHeight="500" WindowStartupLocation="CenterOwner"
-        Background="#0B1019" Foreground="White" FontFamily="Segoe UI">
+        Background="#17171A" Foreground="White" FontFamily="Segoe UI">
     <Window.Resources>
         <Style TargetType="TextBlock"><Setter Property="Foreground" Value="White"/></Style>
-        <Style TargetType="Button"><Setter Property="Background" Value="#20293A"/><Setter Property="Foreground" Value="White"/><Setter Property="BorderBrush" Value="#3B4860"/><Setter Property="Padding" Value="12,7"/><Setter Property="Margin" Value="3"/></Style>
+        <Style TargetType="Button"><Setter Property="Background" Value="#26262B"/><Setter Property="Foreground" Value="White"/><Setter Property="BorderBrush" Value="#41414A"/><Setter Property="Padding" Value="12,7"/><Setter Property="Margin" Value="3"/></Style>
     </Window.Resources>
     <Grid Margin="14">
         <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="92"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-        <StackPanel><TextBlock Text="Render History" FontSize="22" FontWeight="SemiBold"/><TextBlock Text="Completed, failed, paused, and resumable production jobs." Foreground="#8C98AD" Margin="0,4,0,12"/></StackPanel>
+        <StackPanel><TextBlock Text="Render History" FontSize="22" FontWeight="SemiBold"/><TextBlock Text="Completed, failed, paused, and resumable production jobs." Foreground="#7E7E7A" Margin="0,4,0,12"/></StackPanel>
         <DataGrid x:Name="HistoryGrid" Grid.Row="1" AutoGenerateColumns="False" CanUserAddRows="False" IsReadOnly="True" SelectionMode="Single"
-                  Background="#0F1520" Foreground="White" BorderBrush="#303A4D" GridLinesVisibility="Horizontal" HorizontalGridLinesBrush="#263043" AlternatingRowBackground="#141B27">
+                  Background="#101012" Foreground="White" BorderBrush="#33333A" GridLinesVisibility="Horizontal" HorizontalGridLinesBrush="#33333A" AlternatingRowBackground="#1E1E22">
             <DataGrid.Columns>
                 <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="95"/>
                 <DataGridTextColumn Header="Type" Binding="{Binding Type}" Width="70"/>
@@ -2447,12 +3278,12 @@ function Show-RenderHistory {
                 <DataGridTextColumn Header="Output" Binding="{Binding OutputPath}" Width="*"/>
             </DataGrid.Columns>
         </DataGrid>
-        <Border Grid.Row="2" Background="#151C28" BorderBrush="#2C3649" BorderThickness="1" CornerRadius="7" Padding="10" Margin="0,10">
-            <TextBlock x:Name="HistoryDetails" Text="Select a render to see details." Foreground="#AAB4C6" TextWrapping="Wrap"/>
+        <Border Grid.Row="2" Background="#1E1E22" BorderBrush="#33333A" BorderThickness="1" CornerRadius="7" Padding="10" Margin="0,10">
+            <TextBlock x:Name="HistoryDetails" Text="Select a render to see details." Foreground="#A3A39E" TextWrapping="Wrap"/>
         </Border>
         <Grid Grid.Row="3"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-            <StackPanel Orientation="Horizontal"><Button x:Name="OpenHistoryOutputButton" Content="Open Output"/><Button x:Name="OpenHistoryFolderButton" Content="Open Folder"/><Button x:Name="RemoveHistoryButton" Content="Remove" Background="#542735"/><Button x:Name="ClearCompletedButton" Content="Clear Completed"/></StackPanel>
-            <StackPanel Grid.Column="1" Orientation="Horizontal"><Button x:Name="CloseHistoryButton" Content="Close"/><Button x:Name="ResumeHistoryButton" Content="Resume Selected" Background="#7C3AED" BorderBrush="#9B70F7" FontWeight="SemiBold"/></StackPanel>
+            <StackPanel Orientation="Horizontal"><Button x:Name="OpenHistoryOutputButton" Content="Open Output"/><Button x:Name="OpenHistoryFolderButton" Content="Open Folder"/><Button x:Name="RemoveHistoryButton" Content="Remove" Background="#5A3A38"/><Button x:Name="ClearCompletedButton" Content="Clear Completed"/></StackPanel>
+            <StackPanel Grid.Column="1" Orientation="Horizontal"><Button x:Name="CloseHistoryButton" Content="Close"/><Button x:Name="ResumeHistoryButton" Content="Resume Selected" Background="#E0913F" BorderBrush="#E0913F" FontWeight="SemiBold"/></StackPanel>
         </Grid>
     </Grid>
 </Window>
@@ -2527,17 +3358,17 @@ function Show-BulkQueueBuilder {
     # shared by all queue items, so users can prepare many videos in one pass.
     $queueXaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Build render queue" Width="960" Height="700" MinWidth="760" MinHeight="520" WindowStartupLocation="CenterOwner" Background="#101522" Foreground="#F7F7FB">
+        Title="Build render queue" Width="960" Height="700" MinWidth="760" MinHeight="520" WindowStartupLocation="CenterOwner" Background="#17171A" Foreground="#E9E9E6">
   <Grid Margin="18"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
     <TextBlock Text="Add as many videos as you need, then render them one at a time." FontSize="17" FontWeight="SemiBold"/>
     <Grid Grid.Row="1" Margin="0,14,0,12"><Grid.ColumnDefinitions><ColumnDefinition Width="100"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-      <TextBlock Text="Watermark" VerticalAlignment="Center" Foreground="#B9C1D0"/><TextBox x:Name="WatermarkText" Grid.Column="1" Margin="8,0"/><Button x:Name="BrowseWatermarkButton" Grid.Column="2" Content="Browse" Padding="12,6"/>
+      <TextBlock Text="Watermark" VerticalAlignment="Center" Foreground="#A3A39E"/><TextBox x:Name="WatermarkText" Grid.Column="1" Margin="8,0"/><Button x:Name="BrowseWatermarkButton" Grid.Column="2" Content="Browse" Padding="12,6"/>
     </Grid>
     <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto"><StackPanel x:Name="RowsPanel"/></ScrollViewer>
     <Grid Grid.Row="3" Margin="0,14,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-      <Button x:Name="AddVideoButton" Content="+ Add Video" Padding="14,8" Background="#322257" BorderBrush="#7045C7"/>
+      <Button x:Name="AddVideoButton" Content="+ Add Video" Padding="14,8" Background="#2A2119" BorderBrush="#8A5424"/>
       <Button x:Name="SavedProjectsButton" Grid.Column="2" Content="Render Saved Projects" Padding="14,8" Margin="4,0"/>
-      <Button x:Name="RenderAllButton" Grid.Column="3" Content="Render All" Padding="16,8" Margin="4,0" Background="#0B7285" BorderBrush="#22D3EE" FontWeight="SemiBold"/>
+      <Button x:Name="RenderAllButton" Grid.Column="3" Content="Render All" Padding="16,8" Margin="4,0" Background="#8A5424" BorderBrush="#22D3EE" FontWeight="SemiBold"/>
     </Grid>
   </Grid>
 </Window>
@@ -3412,6 +4243,46 @@ function Toggle-FullScreen {
     }
 }
 
+function Update-RenderEta {
+    # A render runs at roughly real time, so a twenty minute video is a wait of
+    # the same order. A percentage does not tell anyone whether to go and make
+    # a coffee; a clock time does.
+    param([double]$Percent)
+
+    if ($null -eq $script:RenderState) {
+        $RenderEtaText.Text = ''
+        $RenderDetailText.Text = ''
+        return
+    }
+    if (-not $script:RenderState.PSObject.Properties['StartedUtc']) { return }
+
+    $elapsed = ([DateTime]::UtcNow - [DateTime]$script:RenderState.StartedUtc).TotalSeconds
+    # Below a few percent the rate is dominated by start-up, and an estimate
+    # made from it would swing wildly and then settle. Better to say nothing.
+    if ($Percent -lt 3.0 -or $elapsed -lt 5.0) {
+        $RenderEtaText.Text = 'estimating...'
+        return
+    }
+
+    $remaining = ($elapsed / $Percent) * (100.0 - $Percent)
+    $finish = [DateTime]::Now.AddSeconds($remaining)
+    $left = if ($remaining -ge 90) { "about $([int][Math]::Round($remaining / 60.0)) min left" }
+            elseif ($remaining -ge 45) { 'about a minute left' }
+            else { 'less than a minute left' }
+    $RenderEtaText.Text = "$left, finishes $($finish.ToString('HH:mm'))"
+
+    $detail = @()
+    if ($script:RenderState.PSObject.Properties['Lanes'] -and [int]$script:RenderState.Lanes -gt 1) {
+        $detail += "$([int]$script:RenderState.Lanes) segments at once"
+    }
+    if ($script:RenderState.PSObject.Properties['DurationSeconds'] -and [double]$script:RenderState.DurationSeconds -gt 0 -and $elapsed -gt 0) {
+        $done = ([double]$script:RenderState.DurationSeconds) * ($Percent / 100.0)
+        $detail += ('{0:0.0}x real time' -f ($done / $elapsed))
+    }
+    if ($script:RenderState.PSObject.Properties['Encoder']) { $detail += [string]$script:RenderState.Encoder }
+    $RenderDetailText.Text = $detail -join '  |  '
+}
+
 $renderTimer = [Windows.Threading.DispatcherTimer]::new()
 $renderTimer.Interval = [TimeSpan]::FromMilliseconds(350)
 $renderTimer.Add_Tick({
@@ -3439,6 +4310,7 @@ $renderTimer.Add_Tick({
             $RenderProgress.Value = $percentage
             $StatusText.Text = "$($script:RenderState.Kind) rendering - $([Math]::Floor($percentage))% - $($script:RenderState.Encoder)"
         }
+        Update-RenderEta -Percent $percentage
         if ($script:RenderState.PSObject.Properties['HistoryId']) {
             $bucket = [int][Math]::Floor($percentage / 5.0)
             if ($bucket -ne $script:LastHistoryProgressBucket) {
@@ -3513,34 +4385,43 @@ $BrowseOutputButton.Add_Click({
     if ($selected) { $OutputText.Text = $selected }
 })
 
-$ImageFolderText.Add_TextChanged({ Invalidate-Preview $true })
+$ImageFolderText.Add_TextChanged({ Invalidate-Preview $true; Update-WorkflowState })
 $AudioText.Add_TextChanged({
     $script:AudioDurationSeconds = 0.0
     $script:CaptionPath = $null
     $script:LiveCaptionEntries = @()
     $script:LiveCaptionCacheSignature = ''
     $LiveCaptionBorder.Visibility = [Windows.Visibility]::Collapsed
-    $CaptionStatusText.Text = 'Captions will be generated locally from this voiceover.'
+    $CaptionStatusText.Text = 'Captions will be generated on this computer from this voiceover.'
     Update-Estimate
     Invalidate-Preview $true
+    Update-WorkflowState
 })
-$WatermarkText.Add_TextChanged({ Invalidate-Preview $false })
-$MinimumDurationText.Add_TextChanged({ Invalidate-Preview $true })
-$MaximumDurationText.Add_TextChanged({ Invalidate-Preview $true })
-$ZoomText.Add_TextChanged({ Invalidate-Preview $false })
-$BlurSlider.Add_ValueChanged({ Update-SettingLabels; Invalidate-Preview $false })
-$BrightnessSlider.Add_ValueChanged({ Update-SettingLabels; Invalidate-Preview $false })
-$QualityCombo.Add_SelectionChanged({ Update-Estimate; Invalidate-Preview $false })
+$WatermarkText.Add_TextChanged({ Invalidate-Preview $false; Update-WorkflowState })
+$OutputText.Add_TextChanged({ Update-WorkflowState })
+$MinimumDurationText.Add_TextChanged({ Invalidate-Preview $true; Update-WorkflowState })
+$MaximumDurationText.Add_TextChanged({ Invalidate-Preview $true; Update-WorkflowState })
+$ZoomText.Add_TextChanged({ Invalidate-Preview $false; Update-WorkflowState })
+$BlurSlider.Add_ValueChanged({ Update-SettingLabels; Invalidate-Preview $false; Update-WorkflowState })
+$BrightnessSlider.Add_ValueChanged({ Update-SettingLabels; Invalidate-Preview $false; Update-WorkflowState })
+$QualityCombo.Add_SelectionChanged({ Update-Estimate; Invalidate-Preview $false; Update-WorkflowState })
 $CaptionModeCombo.Add_SelectionChanged({
     Update-LiveCaptionText
+    Update-CaptionModeButtons
+    Update-WorkflowState
 })
 $CaptionPresetCombo.Add_SelectionChanged({
     Update-CaptionPresetDescription
+    Update-CaptionPresetSwatches
     if (-not $script:IsLoading -and -not $script:IsApplyingCaptionPreset) {
         Apply-CaptionPresetToControls (Get-ComboText $CaptionPresetCombo)
         $StatusText.Text = 'Caption preset applied instantly to the preview.'
     }
+    Update-WorkflowState
 })
+$CaptionTabTypeButton.Add_Click({ Set-CaptionTab 'Type' })
+$CaptionTabColourButton.Add_Click({ Set-CaptionTab 'Colour' })
+$CaptionTabPositionButton.Add_Click({ Set-CaptionTab 'Position' })
 
 $captionStyleChanged = {
     if (-not $script:IsLoading -and -not $script:IsApplyingCaptionPreset) {
@@ -3609,6 +4490,9 @@ $NavCaptionsButton.Add_Click({ Set-ActiveSection 'Captions' })
 $NavBlankingButton.Add_Click({ Set-ActiveSection 'Blanking' })
 $NavExportButton.Add_Click({ Set-ActiveSection 'Export' })
 Set-ActiveSection 'Media'
+Build-CaptionModeButtons
+Build-CaptionPresetSwatches
+Set-CaptionTab 'Type'
 $CancelButton.Add_Click({
     if ($null -ne $script:RenderProcess -and -not $script:RenderProcess.HasExited) {
         $script:CancelRequested = $true
@@ -3707,7 +4591,9 @@ Update-CaptionPresetDescription
 Update-CaptionControlLabels
 Apply-LiveCaptionStyle
 $script:AppVersion = Get-AppVersion -AppRoot $script:AppRoot
-$AppSubtitleText.Text = "Slideshow automation studio  ·  v$($script:AppVersion)"
+# Deliberately ASCII. This file has no byte order mark, so Windows PowerShell 5
+# reads it in the system code page: a middot here arrived on screen as "Â·".
+$AppSubtitleText.Text = "Slideshow automation studio  -  v$($script:AppVersion)"
 # Also in the title bar and taskbar, so the running version is identifiable
 # without opening anything.
 $window.Title = "CreatorFlow $($script:AppVersion)"
@@ -3845,5 +4731,8 @@ After installation, close and reopen this tool.
     }
 })
 $script:IsLoading = $false
+# The rail and the footer describe whatever was restored from the last session,
+# so the window opens already telling the truth about where the work stands.
+Update-WorkflowState
 
 $window.ShowDialog() | Out-Null
