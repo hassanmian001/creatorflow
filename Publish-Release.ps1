@@ -33,6 +33,11 @@ $appItems = @(
     'CaptionWorker.ps1',
     'SlideshowRenderWorker.ps1',
     'SlideshowBatchWorker.ps1',
+    # Shipped so render speed can be measured on the computers the tool is
+    # actually installed on. Lane counts and the choice between processor and
+    # graphics card differ enough between machines that the answer from any one
+    # of them does not carry to the rest.
+    'Measure-RenderPerformance.ps1',
     'Apply-Update.ps1',
     'Install.ps1',
     'Install.bat',
