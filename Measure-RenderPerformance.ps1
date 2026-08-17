@@ -409,8 +409,8 @@ if (-not $SkipGpuComparison) {
 
         Write-Host ''
         $gpuRows | Format-Table -AutoSize | Out-String | Write-Host
-        Write-Host 'The renderer uses the processor. Moving to the card is only worth the' -ForegroundColor DarkGray
-        Write-Host 'complexity if a device above wins by a wide margin on your machines.' -ForegroundColor DarkGray
+        Write-Host 'The application performs a shorter version of this comparison once per' -ForegroundColor DarkGray
+        Write-Host 'machine and uses Vulkan motion effects only when they win by at least 8%.' -ForegroundColor DarkGray
         Write-Host ''
     }
 }

@@ -26,7 +26,7 @@ $script:DataRoot = Join-Path $env:LOCALAPPDATA 'SlideshowVideoTool'
 # Bumping this invalidates resume directories. Segments rendered by an older
 # pipeline must not be concatenated with segments from a newer one, because the
 # camera motion would visibly change partway through the video.
-$script:RenderPipelineVersion = 'nvenc-opencl-v10-linear-zoom-pan-drift'
+$script:RenderPipelineVersion = 'adaptive-vulkan-filters-v11-linear-zoom-pan-drift'
 $script:SettingsPath = Join-Path $script:DataRoot 'settings.json'
 $script:PreviewPath = Join-Path $script:DataRoot 'preview.mp4'
 $script:LastErrorPath = Join-Path $script:DataRoot 'last-error.log'
@@ -993,6 +993,10 @@ $script:FfprobePath = $null
 $script:SelectedEncoder = $null
 $script:RecommendedParallelSegments = $null
 $script:VulkanDeviceIndex = $null
+$script:FilterBackend = $null
+$script:FilterVulkanDeviceIndex = $null
+$script:FilterBackendCachePath = Join-Path $script:DataRoot 'filter-backend.json'
+$script:EncoderBaseText = ''
 $script:OpenClDevice = $null
 $script:ScreenKernelPath = Join-Path $script:AppRoot 'Shaders\screen.cl'
 $script:CurrentPlan = $null
@@ -1870,6 +1874,232 @@ function Select-AvailableEncoder {
     $script:SelectedEncoder = 'libx264'
     $EncoderText.Text = 'CPU encoding fallback - slower'
     return $script:SelectedEncoder
+}
+
+function Get-RenderHardwareSignature {
+    $parts = [Collections.Generic.List[string]]::new()
+    $parts.Add($script:RenderPipelineVersion)
+    try {
+        foreach ($processor in @(Get-CimInstance -ClassName Win32_Processor -ErrorAction Stop)) {
+            $parts.Add("CPU:$([string]$processor.Name)")
+        }
+    }
+    catch { $parts.Add("CPU:$([Environment]::ProcessorCount)") }
+    try {
+        foreach ($adapter in @(Get-CimInstance -ClassName Win32_VideoController -ErrorAction Stop | Sort-Object Name)) {
+            $parts.Add("GPU:$([string]$adapter.Name):$([string]$adapter.DriverVersion)")
+        }
+    }
+    catch { $parts.Add('GPU:unknown') }
+    return Get-StableHash ($parts -join '|')
+}
+
+function Get-UsableVulkanFilterDevices {
+    $devices = [Collections.Generic.List[int]]::new()
+    foreach ($deviceIndex in 0..3) {
+        $arguments = @(
+            '-hide_banner', '-loglevel', 'error',
+            '-init_hw_device', "vulkan=filterprobe:$deviceIndex", '-filter_hw_device', 'filterprobe',
+            '-f', 'lavfi', '-i', 'color=c=black:s=320x180:r=1',
+            '-vf', 'format=nv12,hwupload,libplacebo=w=160:h=90:upscaler=lanczos:downscaler=lanczos,hwdownload,format=nv12',
+            '-frames:v', '1', '-f', 'null', 'NUL'
+        )
+        $process = $null
+        try {
+            $startInfo = [Diagnostics.ProcessStartInfo]::new()
+            $startInfo.FileName = $script:FfmpegPath
+            $startInfo.Arguments = Join-ProcessArguments $arguments
+            $startInfo.UseShellExecute = $false
+            $startInfo.CreateNoWindow = $true
+            $startInfo.RedirectStandardOutput = $true
+            $startInfo.RedirectStandardError = $true
+            $process = [Diagnostics.Process]::new()
+            $process.StartInfo = $startInfo
+            if (-not $process.Start()) { continue }
+            [void]$process.StandardOutput.ReadToEnd()
+            [void]$process.StandardError.ReadToEnd()
+            $process.WaitForExit()
+            if ($process.ExitCode -eq 0) { $devices.Add($deviceIndex) }
+        }
+        catch {}
+        finally { if ($null -ne $process) { $process.Dispose() } }
+    }
+    return $devices.ToArray()
+}
+
+function Measure-FilterDefinition {
+    param(
+        [Parameter(Mandatory = $true)][psobject]$Definition,
+        [Parameter(Mandatory = $true)][string]$WatermarkPath,
+        [ValidateSet('cpu','vulkan')][string]$Backend,
+        [int]$VulkanDeviceIndex = 0
+    )
+    $probeRoot = Join-Path $script:DataRoot "filter-probe-$([guid]::NewGuid().ToString('N'))"
+    New-Item -ItemType Directory -Path $probeRoot -Force | Out-Null
+    $filterPath = Join-Path $probeRoot 'filter.txt'
+    $errorPath = Join-Path $probeRoot 'error.log'
+    [IO.File]::WriteAllText($filterPath, [string]$Definition.FilterText, [Text.UTF8Encoding]::new($false))
+    $arguments = [Collections.Generic.List[string]]::new()
+    foreach ($value in @('-y','-hide_banner','-loglevel','error','-nostats')) { $arguments.Add($value) }
+    if ($Backend -eq 'vulkan') {
+        foreach ($value in @('-init_hw_device',"vulkan=filterbench:$VulkanDeviceIndex",'-filter_hw_device','filterbench')) { $arguments.Add($value) }
+    }
+    foreach ($value in @('-f','lavfi','-i','anullsrc=r=48000:cl=stereo','-stream_loop','-1','-i',$WatermarkPath)) { $arguments.Add($value) }
+    foreach ($imagePath in $Definition.ImageInputs) { $arguments.Add('-i'); $arguments.Add([string]$imagePath) }
+    foreach ($value in @('-filter_complex_script',$filterPath,'-map','[vout]','-frames:v',[string][int]$Definition.RenderFrames,'-f','null','NUL')) { $arguments.Add($value) }
+
+    $process = $null
+    try {
+        $startInfo = [Diagnostics.ProcessStartInfo]::new()
+        $startInfo.FileName = $script:FfmpegPath
+        $startInfo.Arguments = Join-ProcessArguments $arguments.ToArray()
+        $startInfo.UseShellExecute = $false
+        $startInfo.CreateNoWindow = $true
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
+        $process = [Diagnostics.Process]::new()
+        $process.StartInfo = $startInfo
+        $clock = [Diagnostics.Stopwatch]::StartNew()
+        if (-not $process.Start()) { return $null }
+        [void]$process.StandardOutput.ReadToEnd()
+        $errorText = $process.StandardError.ReadToEnd()
+        $process.WaitForExit()
+        $clock.Stop()
+        if ($process.ExitCode -ne 0) {
+            [IO.File]::WriteAllText($errorPath, $errorText, [Text.UTF8Encoding]::new($false))
+            return $null
+        }
+        return $clock.Elapsed.TotalSeconds
+    }
+    catch { return $null }
+    finally {
+        if ($null -ne $process) { $process.Dispose() }
+        try { Remove-Item -LiteralPath $probeRoot -Recurse -Force -ErrorAction SilentlyContinue } catch {}
+    }
+}
+
+function Set-FilterBackendDisplay {
+    $base = if ([string]::IsNullOrWhiteSpace($script:EncoderBaseText)) { [string]$EncoderText.Text } else { $script:EncoderBaseText }
+    if ($script:FilterBackend -eq 'vulkan') {
+        $EncoderText.Text = "$base + GPU motion effects"
+    }
+    else {
+        $EncoderText.Text = "$base + CPU motion effects"
+    }
+}
+
+function Set-CpuFilterFallback {
+    $script:FilterBackend = 'cpu'
+    $script:FilterVulkanDeviceIndex = $null
+    try {
+        $cache = [ordered]@{
+            HardwareSignature = Get-RenderHardwareSignature
+            Backend = 'cpu'
+            VulkanDeviceIndex = -1
+            UpdatedUtc = [DateTime]::UtcNow.ToString('o')
+        }
+        [IO.File]::WriteAllText($script:FilterBackendCachePath, ($cache | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
+    }
+    catch { Write-ToolDiagnostic 'The safe CPU filter fallback could not be cached.' $_.Exception }
+    Set-FilterBackendDisplay
+}
+
+function Select-AvailableFilterBackend {
+    param(
+        [Parameter(Mandatory = $true)][psobject]$Timeline,
+        [Parameter(Mandatory = $true)][psobject]$Settings,
+        [Parameter(Mandatory = $true)][string]$WatermarkPath
+    )
+    if ($null -ne $script:FilterBackend) {
+        return $script:FilterBackend
+    }
+
+    $script:EncoderBaseText = [string]$EncoderText.Text
+    if ($script:SelectedEncoder -eq 'h264_vulkan') {
+        $script:FilterBackend = 'vulkan'
+        $script:FilterVulkanDeviceIndex = [int]$script:VulkanDeviceIndex
+        Set-FilterBackendDisplay
+        return $script:FilterBackend
+    }
+
+    $hardwareSignature = Get-RenderHardwareSignature
+    if (Test-Path -LiteralPath $script:FilterBackendCachePath -PathType Leaf) {
+        try {
+            $cached = [IO.File]::ReadAllText($script:FilterBackendCachePath, [Text.Encoding]::UTF8) | ConvertFrom-Json
+            if ([string]$cached.HardwareSignature -eq $hardwareSignature -and [string]$cached.Backend -in @('cpu','vulkan')) {
+                if ([string]$cached.Backend -eq 'cpu') {
+                    $script:FilterBackend = 'cpu'
+                    Set-FilterBackendDisplay
+                    return $script:FilterBackend
+                }
+                $usableCachedDevices = @(Get-UsableVulkanFilterDevices)
+                if ($usableCachedDevices -contains [int]$cached.VulkanDeviceIndex) {
+                    $script:FilterBackend = 'vulkan'
+                    $script:FilterVulkanDeviceIndex = [int]$cached.VulkanDeviceIndex
+                    Set-FilterBackendDisplay
+                    return $script:FilterBackend
+                }
+            }
+        }
+        catch { Write-ToolDiagnostic 'The cached filter-backend choice could not be read.' $_.Exception }
+    }
+
+    $devices = @(Get-UsableVulkanFilterDevices)
+    if ($devices.Count -eq 0) {
+        $script:FilterBackend = 'cpu'
+    }
+    else {
+        $StatusText.Text = 'Calibrating full-quality motion effects for this laptop...'
+        $window.Dispatcher.Invoke([action]{}, [Windows.Threading.DispatcherPriority]::Background)
+        $benchmarkFrames = [Math]::Min(48, [int]$Timeline.TotalFrames)
+        $slice = New-TimelineSlice -Timeline $Timeline -StartFrame 0 -FrameCount $benchmarkFrames
+        $common = @{
+            Timeline = $slice
+            RenderFrames = $benchmarkFrames
+            ZoomMaximumPercent = [double]$Settings.ZoomMaximum
+            BlurAmount = [double]$Settings.BlurAmount
+            BackgroundBrightnessPercent = [double]$Settings.BackgroundBrightness
+            Width = 1920
+            Height = 1080
+        }
+        $cpuDefinition = New-FilterGraph @common
+        # Warm the source-image and watermark caches before timing either path.
+        [void](Measure-FilterDefinition -Definition $cpuDefinition -WatermarkPath $WatermarkPath -Backend cpu)
+        $cpuSeconds = Measure-FilterDefinition -Definition $cpuDefinition -WatermarkPath $WatermarkPath -Backend cpu
+        $bestSeconds = $cpuSeconds
+        $bestDevice = $null
+        foreach ($deviceIndex in $devices) {
+            $gpuDefinition = New-VulkanFilterGraph @common -HardwareOutputFrames $false
+            $gpuSeconds = Measure-FilterDefinition -Definition $gpuDefinition -WatermarkPath $WatermarkPath -Backend vulkan -VulkanDeviceIndex $deviceIndex
+            if ($null -ne $gpuSeconds -and ($null -eq $bestSeconds -or $gpuSeconds -lt $bestSeconds)) {
+                $bestSeconds = $gpuSeconds
+                $bestDevice = [int]$deviceIndex
+            }
+        }
+        # A small win can disappear with different photographs or background
+        # activity. Require an eight-percent margin before changing pipelines.
+        if ($null -ne $bestDevice -and $null -ne $cpuSeconds -and $bestSeconds -le ($cpuSeconds * 0.92)) {
+            $script:FilterBackend = 'vulkan'
+            $script:FilterVulkanDeviceIndex = $bestDevice
+        }
+        else {
+            $script:FilterBackend = 'cpu'
+        }
+    }
+
+    try {
+        $cache = [ordered]@{
+            HardwareSignature = $hardwareSignature
+            Backend = $script:FilterBackend
+            VulkanDeviceIndex = if ($null -eq $script:FilterVulkanDeviceIndex) { -1 } else { [int]$script:FilterVulkanDeviceIndex }
+            UpdatedUtc = [DateTime]::UtcNow.ToString('o')
+        }
+        [IO.File]::WriteAllText($script:FilterBackendCachePath, ($cache | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
+    }
+    catch { Write-ToolDiagnostic 'The filter-backend choice could not be cached.' $_.Exception }
+    Set-FilterBackendDisplay
+    Write-ToolDiagnostic "Filter backend selected. Backend=$($script:FilterBackend) VulkanDevice=$($script:FilterVulkanDeviceIndex)"
+    return $script:FilterBackend
 }
 
 function Invalidate-Preview {
@@ -3104,7 +3334,9 @@ function Start-ResumableFinalRender {
     $jobPath = Join-Path $runDirectory 'render-job.json'
     $baseName = [IO.Path]::GetFileNameWithoutExtension($DestinationPath)
     $stagingPath = Join-Path (Split-Path -Parent $DestinationPath) ".$baseName.rendering-$runId.mp4"
-    $resumeKey = Get-StableHash "$Fingerprint||$DestinationPath||$Encoder||$($script:RenderPipelineVersion)"
+    $filterBackendKey = if ($null -eq $script:FilterBackend) { 'cpu' } else { [string]$script:FilterBackend }
+    $filterDeviceKey = if ($null -eq $script:FilterVulkanDeviceIndex) { -1 } else { [int]$script:FilterVulkanDeviceIndex }
+    $resumeKey = Get-StableHash "$Fingerprint||$DestinationPath||$Encoder||$filterBackendKey||$filterDeviceKey||$($script:RenderPipelineVersion)"
     $resumeDirectory = Join-Path (Join-Path $script:DataRoot 'resume') $resumeKey
     $captionPath = if ($Settings.CaptionMode -ne 'Off') { [string]$script:CaptionPath } else { '' }
     $job = [ordered]@{
@@ -3126,6 +3358,8 @@ function Start-ResumableFinalRender {
         Settings = $Settings
         Encoder = $Encoder
         VulkanDeviceIndex = if ($null -eq $script:VulkanDeviceIndex) { 0 } else { [int]$script:VulkanDeviceIndex }
+        FilterBackend = if ($null -eq $script:FilterBackend) { 'cpu' } else { [string]$script:FilterBackend }
+        FilterVulkanDeviceIndex = if ($null -eq $script:FilterVulkanDeviceIndex) { -1 } else { [int]$script:FilterVulkanDeviceIndex }
         OpenClDevice = if ($null -eq $script:OpenClDevice) { '' } else { [string]$script:OpenClDevice }
         ScreenKernelPath = $script:ScreenKernelPath
         ParallelSegments = Get-RecommendedParallelSegments -Encoder $Encoder
@@ -3160,6 +3394,7 @@ function Start-ResumableFinalRender {
         DurationSeconds = [double]$script:CurrentPlan.AudioDurationSeconds
         Fingerprint = $Fingerprint
         Encoder = $Encoder
+        FilterBackend = if ($null -eq $script:FilterBackend) { 'cpu' } else { [string]$script:FilterBackend }
         CaptionPath = $captionPath
         ResumeDirectory = $resumeDirectory
         HistoryId = $historyEntry.Id
@@ -3169,7 +3404,7 @@ function Start-ResumableFinalRender {
     $StatusText.Text = "Starting resumable final render with $Encoder..."
     Set-RenderControls $true
     $script:RenderProcess = Start-Process -FilePath 'powershell.exe' -ArgumentList $argumentLine -PassThru -WindowStyle Hidden
-    Write-ToolDiagnostic "Resumable final render started. Encoder=$Encoder PID=$($script:RenderProcess.Id)"
+    Write-ToolDiagnostic "Resumable final render started. Encoder=$Encoder FilterBackend=$($script:FilterBackend) PID=$($script:RenderProcess.Id)"
     $renderTimer.Start()
 }
 
@@ -3206,15 +3441,23 @@ function Start-HistoryFinalResume {
     }
 
     $encoder = Select-AvailableEncoder
+    $filterBackend = Select-AvailableFilterBackend -Timeline $job.Timeline -Settings $job.Settings -WatermarkPath ([string]$job.WatermarkPath)
     $savedPipelineVersion = if ($job.PSObject.Properties['PipelineVersion']) { [string]$job.PipelineVersion } else { '' }
-    if ([string]$job.Encoder -ne $encoder -or $savedPipelineVersion -ne $script:RenderPipelineVersion) {
+    $savedFilterBackend = if ($job.PSObject.Properties['FilterBackend']) { [string]$job.FilterBackend } else { 'cpu' }
+    if ([string]$job.Encoder -ne $encoder -or $savedFilterBackend -ne $filterBackend -or $savedPipelineVersion -ne $script:RenderPipelineVersion) {
         $job.Encoder = $encoder
         if ($job.PSObject.Properties['PipelineVersion']) { $job.PipelineVersion = $script:RenderPipelineVersion }
         else { $job | Add-Member -NotePropertyName PipelineVersion -NotePropertyValue $script:RenderPipelineVersion }
-        $newResumeKey = Get-StableHash "$($HistoryEntry.Id)||$destination||$encoder||$($script:RenderPipelineVersion)"
+        $resumeFilterDevice = if ($null -eq $script:FilterVulkanDeviceIndex) { -1 } else { [int]$script:FilterVulkanDeviceIndex }
+        $newResumeKey = Get-StableHash "$($HistoryEntry.Id)||$destination||$encoder||$filterBackend||$resumeFilterDevice||$($script:RenderPipelineVersion)"
         $job.ResumeDirectory = Join-Path (Join-Path $script:DataRoot 'resume') $newResumeKey
         $HistoryEntry.ResumeDirectory = [string]$job.ResumeDirectory
     }
+    if ($job.PSObject.Properties['FilterBackend']) { $job.FilterBackend = $filterBackend }
+    else { $job | Add-Member -NotePropertyName FilterBackend -NotePropertyValue $filterBackend }
+    $filterDevice = if ($null -eq $script:FilterVulkanDeviceIndex) { -1 } else { [int]$script:FilterVulkanDeviceIndex }
+    if ($job.PSObject.Properties['FilterVulkanDeviceIndex']) { $job.FilterVulkanDeviceIndex = $filterDevice }
+    else { $job | Add-Member -NotePropertyName FilterVulkanDeviceIndex -NotePropertyValue $filterDevice }
     if ($encoder -eq 'h264_vulkan') { $job.VulkanDeviceIndex = [int]$script:VulkanDeviceIndex }
     if ($encoder -eq 'h264_nvenc') {
         if ($job.PSObject.Properties['OpenClDevice']) { $job.OpenClDevice = [string]$script:OpenClDevice }
@@ -3257,7 +3500,7 @@ function Start-HistoryFinalResume {
         Kind = 'Final'; IsWorker = $true; RunDirectory = $runDirectory
         ProgressPath = [string]$job.ProgressPath; ErrorPath = [string]$job.ErrorPath; ChildPidPath = [string]$job.ChildPidPath
         StagingPath = [string]$job.StagingPath; DestinationPath = $destination
-        DurationSeconds = [double]$job.Timeline.AudioDurationSeconds; Fingerprint = ''; Encoder = $encoder
+        DurationSeconds = [double]$job.Timeline.AudioDurationSeconds; Fingerprint = ''; Encoder = $encoder; FilterBackend = $filterBackend
         CaptionPath = [string]$job.CaptionPath; ResumeDirectory = [string]$job.ResumeDirectory; HistoryId = [string]$HistoryEntry.Id
     }
     $RenderProgress.Value = 0
@@ -3648,6 +3891,7 @@ function Start-BatchRender {
                 Quality = [string]$project.Settings.Quality
                 CaptionMode = $captionMode
             }
+            $filterBackend = Select-AvailableFilterBackend -Timeline $project.Timeline -Settings $settings -WatermarkPath ([string]$project.WatermarkPath)
             $projectRun = Join-Path $batchDirectory ('project-{0:D3}' -f $index)
             New-Item -ItemType Directory -Path $projectRun -Force | Out-Null
             $captionPath = if ($captionMode -ne 'Off') { Get-CaptionCachePath -AudioPath ([string]$project.AudioPath) -DataRoot $script:DataRoot } else { '' }
@@ -3666,7 +3910,8 @@ function Start-BatchRender {
             }
             $renderJobPath = Join-Path $projectRun 'render-job.json'
             $renderProgressPath = Join-Path $projectRun 'render-progress.txt'
-            $projectFingerprint = Get-StableHash (([IO.File]::ReadAllText($projectPath, [Text.Encoding]::UTF8)) + "||$encoder||$($script:RenderPipelineVersion)")
+            $filterDeviceKey = if ($null -eq $script:FilterVulkanDeviceIndex) { -1 } else { [int]$script:FilterVulkanDeviceIndex }
+            $projectFingerprint = Get-StableHash (([IO.File]::ReadAllText($projectPath, [Text.Encoding]::UTF8)) + "||$encoder||$filterBackend||$filterDeviceKey||$($script:RenderPipelineVersion)")
             $resumeDirectory = Join-Path (Join-Path $script:DataRoot 'resume') $projectFingerprint
             $stagingPath = Join-Path (Split-Path -Parent $destination) ".$([IO.Path]::GetFileNameWithoutExtension($destination)).batch-$batchId-$index.mp4"
             $renderJob = [ordered]@{
@@ -3686,6 +3931,8 @@ function Start-BatchRender {
                 Settings = $settings
                 Encoder = $encoder
                 VulkanDeviceIndex = if ($null -eq $script:VulkanDeviceIndex) { 0 } else { [int]$script:VulkanDeviceIndex }
+                FilterBackend = $filterBackend
+                FilterVulkanDeviceIndex = if ($null -eq $script:FilterVulkanDeviceIndex) { -1 } else { [int]$script:FilterVulkanDeviceIndex }
                 OpenClDevice = if ($null -eq $script:OpenClDevice) { '' } else { [string]$script:OpenClDevice }
                 ScreenKernelPath = $script:ScreenKernelPath
                 ParallelSegments = Get-RecommendedParallelSegments -Encoder $encoder
@@ -3749,6 +3996,7 @@ function Start-BatchRender {
             OutputPaths = @($prepared | ForEach-Object { $_.DestinationPath })
             DurationSeconds = 1.0
             Encoder = $encoder
+            FilterBackend = if ($null -eq $script:FilterBackend) { 'cpu' } else { [string]$script:FilterBackend }
             HistoryId = $HistoryId
         }
         $RenderProgress.Value = 0
@@ -3797,6 +4045,11 @@ function Complete-BatchRender {
     }
     catch {
         Write-ToolDiagnostic 'Batch rendering failed.' $_.Exception
+        if ($null -ne $state -and $state.PSObject.Properties['FilterBackend'] -and [string]$state.FilterBackend -eq 'vulkan' -and
+            $_.Exception.Message -match '(?i)vulkan|libplacebo|hwupload|hardware device|device lost|device creation') {
+            Set-CpuFilterFallback
+            Write-ToolDiagnostic 'Vulkan motion effects failed during a batch and were disabled for subsequent renders.'
+        }
         if ($null -ne $state -and $state.PSObject.Properties['HistoryId']) { Update-RenderHistoryEntry -Id ([string]$state.HistoryId) -Status 'Failed' -Progress ([int]$RenderProgress.Value) -Detail $_.Exception.Message }
         Show-ErrorMessage "$($_.Exception.Message)`r`n`r`nCompleted videos and resumable segments were kept." 'Batch rendering stopped'
         $StatusText.Text = 'Batch stopped. You can select the same projects again to resume.'
@@ -3886,6 +4139,7 @@ function Start-VideoRender {
         }
 
         $encoder = Select-AvailableEncoder
+        $filterBackend = Select-AvailableFilterBackend -Timeline $script:CurrentPlan -Settings $settings -WatermarkPath $watermarkPath
         if ($Kind -eq 'Final') {
             $finalFingerprint = Get-CurrentFinalFingerprint -Settings $settings -PreviewFingerprint $fingerprint -CaptionPath $script:CaptionPath
             Start-ResumableFinalRender -Settings $settings -Fingerprint $finalFingerprint -DestinationPath $destinationPath -Encoder $encoder -AudioPath $audioPath -WatermarkPath $watermarkPath
@@ -3904,7 +4158,7 @@ function Start-VideoRender {
                 -OpenClScreenKernelPath $script:ScreenKernelPath `
                 -Width 1920 -Height 1080
         }
-        elseif ($encoder -eq 'h264_vulkan') {
+        elseif ($filterBackend -eq 'vulkan') {
             $definition = New-VulkanFilterGraph `
                 -Timeline $script:CurrentPlan `
                 -RenderFrames $renderFrames `
@@ -3913,6 +4167,7 @@ function Start-VideoRender {
                 -BackgroundBrightnessPercent $settings.BackgroundBrightness `
                 -SubtitlePath '' `
                 -CaptionPreset $settings.CaptionPreset `
+                -HardwareOutputFrames ($encoder -eq 'h264_vulkan') `
                 -Width 1920 -Height 1080
         }
         else {
@@ -3954,9 +4209,9 @@ function Start-VideoRender {
                 $arguments.Add($value)
             }
         }
-        elseif ($encoder -eq 'h264_vulkan') {
+        elseif ($filterBackend -eq 'vulkan') {
             foreach ($value in @(
-                    '-init_hw_device', "vulkan=slideshowgpu:$($script:VulkanDeviceIndex)",
+                    '-init_hw_device', "vulkan=slideshowgpu:$($script:FilterVulkanDeviceIndex)",
                     '-filter_hw_device', 'slideshowgpu')) {
                 $arguments.Add($value)
             }
@@ -4002,6 +4257,7 @@ function Start-VideoRender {
             DurationSeconds = $definition.DurationSeconds
             Fingerprint = $fingerprint
             Encoder = $encoder
+            FilterBackend = $filterBackend
             CaptionPath = if ($settings.CaptionMode -ne 'Off') { $script:CaptionPath } else { '' }
             CaptionMode = [string]$settings.CaptionMode
             CaptionWordsPerLine = [int]$settings.CaptionWordsPerLine
@@ -4132,6 +4388,12 @@ function Complete-VideoRender {
                 else {
                     "FFmpeg exited with code $exitCode."
                 }
+            }
+            if ($state.PSObject.Properties['FilterBackend'] -and [string]$state.FilterBackend -eq 'vulkan' -and
+                $errorText -match '(?i)vulkan|libplacebo|hwupload|hardware device|device lost|device creation') {
+                Set-CpuFilterFallback
+                $errorText += "`r`n`r`nGPU motion effects were disabled for this machine. Retry the render; it will use the unchanged CPU quality path."
+                Write-ToolDiagnostic 'Vulkan motion effects failed and were disabled for subsequent renders.'
             }
             if ($state.PSObject.Properties['HistoryId']) { Update-RenderHistoryEntry -Id ([string]$state.HistoryId) -Status 'Failed' -Progress ([int]$RenderProgress.Value) -Detail $errorText }
             Show-ErrorMessage "$errorText`r`n`r`nA full error log was saved to:`r`n$script:LastErrorPath" 'Rendering failed'

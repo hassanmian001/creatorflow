@@ -208,6 +208,7 @@ The tool measures the machine it finds itself on rather than assuming:
 | It checks | What it does with the answer |
 |---|---|
 | Video encoder | Probes NVIDIA NVENC, then AMD AMF, then NVIDIA Vulkan, then Intel Quick Sync, and finally falls back to CPU encoding. The chosen one is named in the top-right of the window. |
+| Motion-effects processor | Times the unchanged full-quality CPU graph against every compatible Vulkan GPU on the first render. It uses a GPU only when it wins by at least 8%; the per-machine result is cached. |
 | Processor cores and installed memory | Picks how many 30-second segments render at once — 1 lane on a small laptop, up to 4 on a workstation. |
 | OpenCL device | Only used for the GPU watermark and caption compositor, and only on NVIDIA. Every other machine does that step on the CPU, with identical output. |
 
@@ -238,22 +239,27 @@ Quadro P620 driver provides. The included FFmpeg 7.1.1 build uses a compatible
 NVENC API, so H.264 encoding works on the P620 without downgrading the NVIDIA
 driver.
 
-Photo preparation and zoom calculations use the CPU. The custom OpenCL kernel
-runs the exact gamma-RGB Screen equation on the NVIDIA GPU and also performs the
-final caption alpha composite. NVENC then encodes the result. Three independent
-30-second segments render simultaneously to make better use of the six-core CPU
-and the GPU's otherwise idle encoding capacity. Selecting **SRT only** is the
-fastest caption mode because no caption pixels are rendered into the video.
+The first render on a new machine performs a short calibration using the actual
+project media. It compares the existing CPU motion graph with every usable Vulkan
+device, after warming the file cache, and requires the GPU to win by at least eight
+percent. The choice is stored in `%LOCALAPPDATA%\SlideshowVideoTool\filter-backend.json`
+and is automatically invalidated by a renderer update, CPU/GPU change, or graphics
+driver update. A failed or slower GPU probe keeps the proven CPU renderer.
 
-Expect the GPU to sit well below full utilization during a render, and note that
-this is normal rather than a misconfiguration. On the NVENC path the CPU does the
-expensive per-pixel work — Lanczos scaling to the overscan canvas, the background
-blur, the frame-by-frame zoom, and the temporal blend — while the GPU only runs a
-single-pass Screen composite and the fixed-function NVENC encoder. Both finish
-almost immediately, so the card spends most of its time waiting for CPU frames.
-Moving the zoom itself onto the GPU would change that, but the Vulkan
-`libplacebo` path that can do so is currently only used when NVENC is
-unavailable.
+Both paths retain 1920x1080 delivery, 24 FPS output, 48 FPS motion sampling,
+three-frame temporal motion blur, Lanczos photo resampling, RGB Screen blending,
+caption styling, and the selected encoder quality/bitrate. The Vulkan path changes
+where the animated fractional crop runs, not those quality decisions. Its real-number
+crop needs only enough source overscan to avoid upscaling; the CPU `zoompan` path
+keeps its larger 2x canvas to avoid whole-pixel stepping.
+
+Three independent 30-second segments render simultaneously on a machine with
+enough CPU and memory. An 8 GB laptop remains at one lane to avoid paging. Selecting
+**SRT only** is the fastest caption mode because no caption pixels are rendered into
+the video. GPU utilization still need not read 100 percent: decode, static photo
+preparation, RGB Screen blending, captions, and encoding use different CPU/GPU
+engines. The top-right status names both the encoder and whether motion effects use
+the CPU or the calibrated Vulkan GPU.
 
 The bundled FFmpeg build retains its original `LICENSE` and `README.txt`; FFmpeg
 is free software distributed under its applicable LGPL/GPL terms.
