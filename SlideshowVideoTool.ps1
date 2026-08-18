@@ -610,6 +610,9 @@ $xaml = @'
                             <Grid Margin="0,3"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="76"/></Grid.ColumnDefinitions>
                                 <TextBlock Text="Maximum zoom %" Style="{StaticResource RowLabel}"/>
                                 <TextBox x:Name="ZoomText" Grid.Column="1" Text="110" HorizontalContentAlignment="Center"/></Grid>
+                            <CheckBox x:Name="MotionBlurCheckBox" IsChecked="True" Margin="0,16,0,0" Content="Cinematic motion blur"/>
+                            <TextBlock x:Name="MotionBlurNoteText" Style="{StaticResource NoteText}" Margin="0,5,0,0" TextWrapping="Wrap"
+                                       Text="On: camera motion is generated at double the frame rate and blended, the way a real camera's shutter blurs movement. Off: renders roughly twice as fast, with slightly crisper but more stepped motion."/>
                             <Border BorderBrush="{StaticResource StrongLineBrush}" BorderThickness="2,0,0,0" Padding="11,2" Margin="1,20,0,0">
                                 <StackPanel>
                                     <TextBlock Text="Each image holds for a random time inside this range." Style="{StaticResource NoteText}"/>
@@ -828,6 +831,7 @@ $controlNames = @(
     'CaptionShadowSlider', 'CaptionShadowValueText', 'CaptionBackgroundColorText', 'CaptionBackgroundColorButton', 'CaptionBackgroundOpacitySlider', 'CaptionBackgroundOpacityValueText',
     'CaptionAlignmentCombo', 'CaptionPositionXSlider', 'CaptionPositionXValueText', 'CaptionPositionYSlider', 'CaptionPositionYValueText',
     'CaptionMaxWidthSlider', 'CaptionMaxWidthValueText', 'CaptionWordsPerLineSlider', 'CaptionWordsPerLineValueText', 'CaptionLineSpacingSlider', 'CaptionLineSpacingValueText',
+    'MotionBlurCheckBox',
     'BlurSlider', 'BlurValueText', 'BrightnessSlider', 'BrightnessValueText',
     'QualityCombo', 'EstimateText', 'PreviewMedia', 'PlayPauseButton',
     'SeekSlider', 'TimeText', 'VolumeSlider', 'FullScreenButton',
@@ -1403,6 +1407,7 @@ function Get-UiSettings {
         MinimumDuration = $minimum
         MaximumDuration = $maximum
         ZoomMaximum = $zoom
+        MotionBlur = [bool]$MotionBlurCheckBox.IsChecked
         BlurAmount = [double]$BlurSlider.Value
         BackgroundBrightness = [double]$BrightnessSlider.Value
         Quality = Get-ComboText $QualityCombo
@@ -1450,6 +1455,9 @@ function Load-UserSettings {
         if ($null -ne $settings.MinimumDuration) { $MinimumDurationText.Text = [string]$settings.MinimumDuration }
         if ($null -ne $settings.MaximumDuration) { $MaximumDurationText.Text = [string]$settings.MaximumDuration }
         if ($null -ne $settings.ZoomMaximum) { $ZoomText.Text = [string]$settings.ZoomMaximum }
+        # Settings written before this option existed have no MotionBlur value.
+        # Those renders all had it, so absent must mean on, not off.
+        if ($settings.PSObject.Properties['MotionBlur']) { $MotionBlurCheckBox.IsChecked = [bool]$settings.MotionBlur }
         if ($null -ne $settings.BlurAmount) { $BlurSlider.Value = [double]$settings.BlurAmount }
         if ($null -ne $settings.BackgroundBrightness) { $BrightnessSlider.Value = [double]$settings.BackgroundBrightness }
         if ($null -ne $settings.Quality) { Set-ComboText $QualityCombo ([string]$settings.Quality) }
@@ -2059,6 +2067,7 @@ function Test-FilterBackendVisualMatch {
         ZoomMaximumPercent = [double]$Settings.ZoomMaximum
         BlurAmount = [double]$Settings.BlurAmount
         BackgroundBrightnessPercent = [double]$Settings.BackgroundBrightness
+        MotionBlur = [bool]$Settings.MotionBlur
         Width = $probeWidth
         Height = $probeHeight
     }
@@ -2203,6 +2212,7 @@ function Select-AvailableFilterBackend {
             ZoomMaximumPercent = [double]$Settings.ZoomMaximum
             BlurAmount = [double]$Settings.BlurAmount
             BackgroundBrightnessPercent = [double]$Settings.BackgroundBrightness
+        MotionBlur = [bool]$Settings.MotionBlur
             Width = 1920
             Height = 1080
         }
@@ -2483,7 +2493,8 @@ function Update-WorkflowState {
     else { $sourceSummary = 'Nothing chosen yet' }
     Set-StepComplete -Name 'Media' -Complete ($hasImages -and $hasAudio) -Summary $sourceSummary
 
-    Set-StepComplete -Name 'Motion' -Complete $true -Summary "$($MinimumDurationText.Text)-$($MaximumDurationText.Text)s holds, $($ZoomText.Text)% zoom"
+    $motionBlurSummary = if ($MotionBlurCheckBox.IsChecked) { 'blur on' } else { 'blur off - faster' }
+    Set-StepComplete -Name 'Motion' -Complete $true -Summary "$($MinimumDurationText.Text)-$($MaximumDurationText.Text)s holds, $($ZoomText.Text)% zoom, $motionBlurSummary"
 
     $captionMode = Get-ComboText $CaptionModeCombo
     $captionsDone = $true
@@ -2698,6 +2709,7 @@ function Get-CurrentPreviewFingerprint {
     return @(
         $script:PlanSignature,
         $Settings.ZoomMaximum,
+        $Settings.MotionBlur,
         $Settings.BlurAmount,
         $Settings.BackgroundBrightness,
         $Settings.Quality,
@@ -4031,6 +4043,7 @@ function Start-BatchRender {
                 MinimumDuration = [double]$project.Settings.MinimumDuration
                 MaximumDuration = [double]$project.Settings.MaximumDuration
                 ZoomMaximum = [double]$project.Settings.ZoomMaximum
+                MotionBlur = if ($project.Settings.PSObject.Properties['MotionBlur']) { [bool]$project.Settings.MotionBlur } else { $true }
                 BlurAmount = [double]$project.Settings.BlurAmount
                 BackgroundBrightness = [double]$project.Settings.BackgroundBrightness
                 Quality = [string]$project.Settings.Quality
@@ -4301,6 +4314,7 @@ function Start-VideoRender {
                 -SubtitlePath '' `
                 -CaptionPreset $settings.CaptionPreset `
                 -OpenClScreenKernelPath $script:ScreenKernelPath `
+                -MotionBlur ([bool]$settings.MotionBlur) `
                 -Width 1920 -Height 1080
         }
         elseif ($filterBackend -eq 'vulkan') {
@@ -4313,6 +4327,7 @@ function Start-VideoRender {
                 -SubtitlePath '' `
                 -CaptionPreset $settings.CaptionPreset `
                 -HardwareOutputFrames ($encoder -eq 'h264_vulkan') `
+                -MotionBlur ([bool]$settings.MotionBlur) `
                 -Width 1920 -Height 1080
         }
         else {
@@ -4324,6 +4339,7 @@ function Start-VideoRender {
                 -BackgroundBrightnessPercent $settings.BackgroundBrightness `
                 -SubtitlePath '' `
                 -CaptionPreset $settings.CaptionPreset `
+                -MotionBlur ([bool]$settings.MotionBlur) `
                 -Width 1920 -Height 1080
         }
 
@@ -4687,6 +4703,7 @@ function Open-Project {
             $MinimumDurationText.Text = [string]$project.Settings.MinimumDuration
             $MaximumDurationText.Text = [string]$project.Settings.MaximumDuration
             $ZoomText.Text = [string]$project.Settings.ZoomMaximum
+            $MotionBlurCheckBox.IsChecked = if ($project.Settings.PSObject.Properties['MotionBlur']) { [bool]$project.Settings.MotionBlur } else { $true }
             $BlurSlider.Value = [double]$project.Settings.BlurAmount
             $BrightnessSlider.Value = [double]$project.Settings.BackgroundBrightness
             Set-ComboText $QualityCombo ([string]$project.Settings.Quality)
@@ -4955,6 +4972,8 @@ $OutputText.Add_TextChanged({ Update-WorkflowState })
 $MinimumDurationText.Add_TextChanged({ Invalidate-Preview $true; Update-WorkflowState })
 $MaximumDurationText.Add_TextChanged({ Invalidate-Preview $true; Update-WorkflowState })
 $ZoomText.Add_TextChanged({ Invalidate-Preview $false; Update-WorkflowState })
+$MotionBlurCheckBox.Add_Checked({ Invalidate-Preview $false; Update-WorkflowState })
+$MotionBlurCheckBox.Add_Unchecked({ Invalidate-Preview $false; Update-WorkflowState })
 $BlurSlider.Add_ValueChanged({ Update-SettingLabels; Invalidate-Preview $false; Update-WorkflowState })
 $BrightnessSlider.Add_ValueChanged({ Update-SettingLabels; Invalidate-Preview $false; Update-WorkflowState })
 $QualityCombo.Add_SelectionChanged({ Update-Estimate; Invalidate-Preview $false; Update-WorkflowState })

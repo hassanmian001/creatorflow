@@ -427,14 +427,17 @@ try {
         if ([string]$script:Job.CaptionMode -in @('Burned only', 'Burned + SRT')) {
             $segmentSrt = New-SegmentSubtitle -SourcePath ([string]$script:Job.CaptionPath) -StartSeconds ($startFrame / [double]$fps) -DurationSeconds $durationSeconds -DestinationPath (Join-Path $resumeDirectory ('captions-{0:D4}.srt' -f $segmentIndex)) -MaxWordsPerLine $captionWordsPerLine
         }
+        # Jobs saved before this option existed have no MotionBlur value, and
+        # every one of those was rendered with it on.
+        $motionBlur = if ($script:Job.Settings.PSObject.Properties['MotionBlur']) { [bool]$script:Job.Settings.MotionBlur } else { $true }
         if ($useOpenClEffects) {
-            $definition = New-FilterGraph -Timeline $slice -RenderFrames $frameCount -ZoomMaximumPercent ([double]$script:Job.Settings.ZoomMaximum) -BlurAmount ([double]$script:Job.Settings.BlurAmount) -BackgroundBrightnessPercent ([double]$script:Job.Settings.BackgroundBrightness) -SubtitlePath $segmentSrt -CaptionPreset $captionPreset -CaptionStyle $script:Job.Settings -OpenClScreenKernelPath $screenKernelPath -Width 1920 -Height 1080
+            $definition = New-FilterGraph -Timeline $slice -RenderFrames $frameCount -ZoomMaximumPercent ([double]$script:Job.Settings.ZoomMaximum) -BlurAmount ([double]$script:Job.Settings.BlurAmount) -BackgroundBrightnessPercent ([double]$script:Job.Settings.BackgroundBrightness) -SubtitlePath $segmentSrt -CaptionPreset $captionPreset -CaptionStyle $script:Job.Settings -OpenClScreenKernelPath $screenKernelPath -MotionBlur $motionBlur -Width 1920 -Height 1080
         }
         elseif ($filterBackend -eq 'vulkan') {
-            $definition = New-VulkanFilterGraph -Timeline $slice -RenderFrames $frameCount -ZoomMaximumPercent ([double]$script:Job.Settings.ZoomMaximum) -BlurAmount ([double]$script:Job.Settings.BlurAmount) -BackgroundBrightnessPercent ([double]$script:Job.Settings.BackgroundBrightness) -SubtitlePath $segmentSrt -CaptionPreset $captionPreset -CaptionStyle $script:Job.Settings -HardwareOutputFrames ([string]$script:Job.Encoder -eq 'h264_vulkan') -Width 1920 -Height 1080
+            $definition = New-VulkanFilterGraph -Timeline $slice -RenderFrames $frameCount -ZoomMaximumPercent ([double]$script:Job.Settings.ZoomMaximum) -BlurAmount ([double]$script:Job.Settings.BlurAmount) -BackgroundBrightnessPercent ([double]$script:Job.Settings.BackgroundBrightness) -SubtitlePath $segmentSrt -CaptionPreset $captionPreset -CaptionStyle $script:Job.Settings -HardwareOutputFrames ([string]$script:Job.Encoder -eq 'h264_vulkan') -MotionBlur $motionBlur -Width 1920 -Height 1080
         }
         else {
-            $definition = New-FilterGraph -Timeline $slice -RenderFrames $frameCount -ZoomMaximumPercent ([double]$script:Job.Settings.ZoomMaximum) -BlurAmount ([double]$script:Job.Settings.BlurAmount) -BackgroundBrightnessPercent ([double]$script:Job.Settings.BackgroundBrightness) -SubtitlePath $segmentSrt -CaptionPreset $captionPreset -CaptionStyle $script:Job.Settings -Width 1920 -Height 1080
+            $definition = New-FilterGraph -Timeline $slice -RenderFrames $frameCount -ZoomMaximumPercent ([double]$script:Job.Settings.ZoomMaximum) -BlurAmount ([double]$script:Job.Settings.BlurAmount) -BackgroundBrightnessPercent ([double]$script:Job.Settings.BackgroundBrightness) -SubtitlePath $segmentSrt -CaptionPreset $captionPreset -CaptionStyle $script:Job.Settings -MotionBlur $motionBlur -Width 1920 -Height 1080
         }
         $filterPath = Join-Path $resumeDirectory ('filter-{0:D4}.txt' -f $segmentIndex)
         [IO.File]::WriteAllText($filterPath, $definition.FilterText, [Text.UTF8Encoding]::new($false))
