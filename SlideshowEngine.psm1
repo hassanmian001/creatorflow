@@ -208,7 +208,9 @@ function New-TimelinePlan {
         [double]$MinimumDurationSeconds = 5.0,
         [double]$MaximumDurationSeconds = 7.0,
         [int]$Fps = 24,
-        [Nullable[int]]$Seed
+        [Nullable[int]]$Seed,
+        [ValidateSet('Cinematic In', 'Cinematic Out', 'Balanced', 'Slow Drift', 'Dynamic')]
+        [string]$MotionPreset = 'Balanced'
     )
 
     if ($ImagePaths.Count -lt 2) {
@@ -261,6 +263,7 @@ function New-TimelinePlan {
         }
     }
 
+    $preset = Get-MotionPreset -PresetName $MotionPreset
     $items = [System.Collections.Generic.List[object]]::new()
     for ($index = 0; $index -lt $occurrenceCount; $index++) {
         $imageIndex = $imageIndices[$index]
@@ -270,11 +273,9 @@ function New-TimelinePlan {
             ImageName = [IO.Path]::GetFileName($ImagePaths[$imageIndex])
             Frames = [int]$duration.Frames
             DurationTenths = [int]$duration.Tenths
-            ZoomDirection = if ($random.Next(0, 2) -eq 0) { 'In' } else { 'Out' }
-            # A slow drift across one axis gives the zoom a more filmic feel.
-            # The offset is always scaled by the crop margin the zoom creates,
-            # so the window can never leave the image.
-            PanDirection = @('Left', 'Right', 'Up', 'Down')[$random.Next(0, 4)]
+            ZoomDirection = Get-WeightedRandomChoice -Weights $preset.ZoomWeights -Random $random
+            PanDirection = Get-WeightedRandomChoice -Weights $preset.PanWeights -Random $random
+            MotionPreset = $MotionPreset
         })
     }
 
@@ -286,8 +287,98 @@ function New-TimelinePlan {
         TotalFrames = $targetFrames
         MinimumDurationSeconds = $minimumTenths / 10.0
         MaximumDurationSeconds = $maximumTenths / 10.0
+        MotionPreset = $MotionPreset
         Items = $items.ToArray()
     }
+}
+
+function Get-AllMotionPresets {
+    $presetNames = @('Cinematic In', 'Cinematic Out', 'Balanced', 'Slow Drift', 'Dynamic')
+    $presets = @()
+    foreach ($name in $presetNames) {
+        $preset = Get-MotionPreset -PresetName $name
+        $presets += [pscustomobject]@{
+            Name = $preset.Name
+            Description = $preset.Description
+        }
+    }
+    return $presets
+}
+
+function Get-RandomMotionPreset {
+    param([System.Random]$Random)
+    $presetNames = @('Cinematic In', 'Cinematic Out', 'Balanced', 'Slow Drift', 'Dynamic')
+    return $presetNames[$Random.Next(0, $presetNames.Count)]
+}
+
+function Get-MotionPreset {
+    [CmdletBinding()]
+    param(
+        [ValidateSet('Cinematic In', 'Cinematic Out', 'Balanced', 'Slow Drift', 'Dynamic')]
+        [string]$PresetName = 'Balanced'
+    )
+
+    $presets = @{
+        'Cinematic In' = @{
+            Name = 'Cinematic In'
+            Description = 'Intense zoom-in with varied pans - engaging and revealing'
+            ZoomWeights = @{ 'In' = 0.8; 'Out' = 0.2 }
+            PanWeights = @{ 'Left' = 0.25; 'Right' = 0.25; 'Up' = 0.25; 'Down' = 0.25 }
+        }
+        'Cinematic Out' = @{
+            Name = 'Cinematic Out'
+            Description = 'Zoom-out effect with varied pans - revealing wide shots'
+            ZoomWeights = @{ 'In' = 0.2; 'Out' = 0.8 }
+            PanWeights = @{ 'Left' = 0.25; 'Right' = 0.25; 'Up' = 0.25; 'Down' = 0.25 }
+        }
+        'Balanced' = @{
+            Name = 'Balanced'
+            Description = 'Mixed zoom with random pans - naturally varied'
+            ZoomWeights = @{ 'In' = 0.5; 'Out' = 0.5 }
+            PanWeights = @{ 'Left' = 0.25; 'Right' = 0.25; 'Up' = 0.25; 'Down' = 0.25 }
+        }
+        'Slow Drift' = @{
+            Name = 'Slow Drift'
+            Description = 'Gentle motion - calm, documentary-style'
+            ZoomWeights = @{ 'In' = 0.4; 'Out' = 0.6 }
+            PanWeights = @{ 'Left' = 0.35; 'Right' = 0.35; 'Up' = 0.15; 'Down' = 0.15 }
+        }
+        'Dynamic' = @{
+            Name = 'Dynamic'
+            Description = 'Fast, aggressive zoom-in with directional pans - energetic'
+            ZoomWeights = @{ 'In' = 0.85; 'Out' = 0.15 }
+            PanWeights = @{ 'Left' = 0.3; 'Right' = 0.3; 'Up' = 0.2; 'Down' = 0.2 }
+        }
+    }
+
+    return $presets[$PresetName]
+}
+
+function Get-WeightedRandomChoice {
+    param(
+        [hashtable]$Weights,
+        [System.Random]$Random
+    )
+
+    $choices = @()
+    $values = @()
+    foreach ($key in $Weights.Keys) {
+        $choices += $key
+        $values += $Weights[$key]
+    }
+
+    $totalWeight = ($values | Measure-Object -Sum).Sum
+    $randomValue = $Random.NextDouble() * $totalWeight
+    $currentSum = 0
+
+    for ($i = 0; $i -lt $choices.Count; $i++) {
+        $currentSum += $values[$i]
+        if ($randomValue -le $currentSum) {
+            return $choices[$i]
+        }
+    }
+
+    return $choices[-1]
 }
 
 function Format-InvariantNumber {
