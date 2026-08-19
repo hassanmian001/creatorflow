@@ -3977,7 +3977,6 @@ function Show-BulkQueueBuilder {
         $queueDirectory = Join-Path (Join-Path $script:DataRoot 'queue-projects') ([guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Path $queueDirectory -Force | Out-Null
         $projectPaths = [Collections.Generic.List[string]]::new()
-        $batchRandom = [System.Random]::new()
         for ($index = 0; $index -lt $rows.Count; $index++) {
             $row = $rows[$index]; $imageFolder = $row.ImageBox.Text.Trim(); $audio = $row.AudioBox.Text.Trim(); $output = $row.OutputBox.Text.Trim()
             if ([string]::IsNullOrWhiteSpace($imageFolder) -or -not (Test-Path -LiteralPath $imageFolder -PathType Container)) { throw "Video $($index + 1): select a valid images folder." }
@@ -3987,8 +3986,7 @@ function Show-BulkQueueBuilder {
             if ([string]::IsNullOrWhiteSpace($outputDirectory) -or -not (Test-Path -LiteralPath $outputDirectory -PathType Container)) { throw "Video $($index + 1): the output folder does not exist." }
             $images = @(Get-ValidatedImages $imageFolder)
             $duration = Get-MediaDurationSeconds -FfprobePath $script:FfprobePath -MediaPath $audio
-            $randomPreset = Get-RandomMotionPreset -Random $batchRandom
-            $timeline = New-TimelinePlan -ImagePaths $images -AudioDurationSeconds $duration -MinimumDurationSeconds $settings.MinimumDuration -MaximumDurationSeconds $settings.MaximumDuration -Fps 24 -MotionPreset $randomPreset
+            $timeline = New-TimelinePlan -ImagePaths $images -AudioDurationSeconds $duration -MinimumDurationSeconds $settings.MinimumDuration -MaximumDurationSeconds $settings.MaximumDuration -Fps 24
             $project = [ordered]@{ SchemaVersion=1; ImageFolder=$imageFolder; AudioPath=$audio; WatermarkPath=$watermark; OutputPath=$output; Settings=$settings; PlanSignature=(Get-PlanSignature -Images $images -Duration $duration -Settings $settings -AudioPath $audio); Timeline=$timeline }
             $projectPath = Join-Path $queueDirectory ('video-{0:D3}.svp.json' -f ($index + 1))
             [IO.File]::WriteAllText($projectPath, ($project | ConvertTo-Json -Depth 12), [Text.UTF8Encoding]::new($false)); $projectPaths.Add($projectPath)
