@@ -212,8 +212,8 @@ The tool measures the machine it finds itself on rather than assuming:
 
 | It checks | What it does with the answer |
 |---|---|
-| Video encoder | Probes NVIDIA NVENC, then AMD AMF, then NVIDIA Vulkan, then Intel Quick Sync, and finally falls back to CPU encoding. The chosen one is named in the top-right of the window. |
-| Motion-effects processor | Times the unchanged full-quality CPU graph against every compatible Vulkan GPU on the first render. It uses a GPU only when it wins by at least 8%; the per-machine result is cached. |
+| Video encoder | Probes NVIDIA NVENC, then AMD AMF, then NVIDIA Vulkan, then Intel Quick Sync, and finally falls back to CPU encoding. Each probe encodes a real 1920x1080 frame, because hardware encoders reject frames below a minimum size and would otherwise report themselves as missing. The chosen one is named in the top-right of the window. |
+| Motion-effects processor | Times the unchanged full-quality CPU graph against every compatible Vulkan GPU on the first render, then compares the two renders' actual pixels at full 1920x1080. It uses a GPU only when it wins by at least 8% and matches the CPU render; the per-machine result is cached. |
 | Processor cores and installed memory | Picks how many 30-second segments render at once — 1 lane on a small laptop, up to 4 on a workstation. |
 | OpenCL device | Only used for the GPU watermark and caption compositor, and only on NVIDIA. Every other machine does that step on the CPU, with identical output. |
 
@@ -274,9 +274,15 @@ driver.
 The first render on a new machine performs a short calibration using the actual
 project media. It compares the existing CPU motion graph with every usable Vulkan
 device, after warming the file cache, and requires the GPU to win by at least eight
-percent. The choice is stored in `%LOCALAPPDATA%\SlideshowVideoTool\filter-backend.json`
-and is automatically invalidated by a renderer update, CPU/GPU change, or graphics
-driver update. A failed or slower GPU probe keeps the proven CPU renderer.
+percent. The winner then has to prove it looks right: eight frames from each path
+are rendered at the full 1920x1080 delivery size and compared with PSNR, and the
+GPU is used only above 28 dB. That comparison is made at delivery size on purpose.
+The two paths place their crop differently by a fraction of a pixel — invisible in
+the finished video — and measuring a shrunken copy magnifies that fraction until a
+correct GPU render looks like a broken one. The choice is stored in
+`%LOCALAPPDATA%\SlideshowVideoTool\filter-backend.json` and is automatically
+invalidated by a renderer update, CPU/GPU change, or graphics driver update. A
+failed, slower, or visually mismatched GPU probe keeps the proven CPU renderer.
 
 Both paths retain 1920x1080 delivery, 24 FPS output, 48 FPS motion sampling,
 three-frame temporal motion blur, Lanczos photo resampling, RGB Screen blending,

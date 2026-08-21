@@ -26,7 +26,11 @@ $script:DataRoot = Join-Path $env:LOCALAPPDATA 'SlideshowVideoTool'
 # Bumping this invalidates resume directories. Segments rendered by an older
 # pipeline must not be concatenated with segments from a newer one, because the
 # camera motion would visibly change partway through the video.
-$script:RenderPipelineVersion = 'adaptive-vulkan-filters-v12-visual-match-check'
+# Bumped because both hardware gates changed their answer: the encoder probe
+# and the GPU visual-match check now run at delivery resolution. Every machine
+# that cached "no NVENC" or "CPU filters" under the old, undersized probes must
+# ask again rather than keep a verdict that was reached the wrong way.
+$script:RenderPipelineVersion = 'adaptive-vulkan-filters-v13-full-size-hardware-probes'
 $script:SettingsPath = Join-Path $script:DataRoot 'settings.json'
 $script:PreviewPath = Join-Path $script:DataRoot 'preview.mp4'
 $script:LastErrorPath = Join-Path $script:DataRoot 'last-error.log'
@@ -1585,9 +1589,18 @@ Then close and reopen this tool.
 
 function Test-VideoEncoder {
     param([string]$Encoder)
+    # Probe at the resolution this tool actually delivers, not at a token
+    # thumbnail. Hardware encoders refuse frames below a minimum size, and that
+    # minimum grew: NVENC on Pascal accepted a width of 33, but Turing raised it
+    # to 145 and every card since has kept it. A 64x64 probe therefore reported
+    # "no NVENC" on every modern NVIDIA GPU, and the tool fell through to Quick
+    # Sync on the integrated chip - or to libx264 on a desktop that has no
+    # integrated chip at all - while the discrete card sat idle. 1920x1080 is
+    # one frame of black and costs nothing to encode, and answers the only
+    # question being asked: can this encoder handle the real output?
     $arguments = @(
         '-hide_banner', '-loglevel', 'error',
-        '-f', 'lavfi', '-i', 'color=c=black:s=64x64:r=1',
+        '-f', 'lavfi', '-i', 'color=c=black:s=1920x1080:r=24',
         '-frames:v', '1', '-c:v', $Encoder, '-f', 'null', 'NUL'
     )
 
@@ -1630,13 +1643,17 @@ function Test-VideoEncoder {
 function Find-NvidiaVulkanEncoderDevice {
     # Device order is normally Intel=0, NVIDIA=1 on this laptop, but probe a
     # small range so the tool remains usable if Windows changes that order.
+    #
+    # Delivery resolution for the same reason as Test-VideoEncoder: this is a
+    # hardware encoder, and hardware encoders reject frames below a minimum
+    # size that a thumbnail-sized probe sits underneath.
     $fallbackIndex = $null
     foreach ($deviceIndex in @(1, 0, 2, 3)) {
         $arguments = @(
             '-hide_banner', '-loglevel', 'info',
             '-init_hw_device', "vulkan=slideshowgpu:$deviceIndex",
             '-filter_hw_device', 'slideshowgpu',
-            '-f', 'lavfi', '-i', 'color=c=black:s=64x64:r=1',
+            '-f', 'lavfi', '-i', 'color=c=black:s=1920x1080:r=24',
             '-vf', 'format=nv12,hwupload',
             '-frames:v', '1', '-c:v', 'h264_vulkan', '-f', 'null', 'NUL'
         )
@@ -2059,8 +2076,17 @@ function Test-FilterBackendVisualMatch {
     $slice = New-TimelineSlice -Timeline $Timeline -StartFrame 0 -FrameCount $checkFrames
     # Rendered directly at this size (not scaled afterward) - both graphs'
     # own [vout] comes out at whatever Width/Height they were built with.
-    $probeWidth = 320
-    $probeHeight = 180
+    #
+    # Compare at the resolution that ships. The two paths animate differently
+    # by design: zoompan crops on whole input pixels over a 2x canvas, while
+    # libplacebo crops on real numbers over a 1.25x one. At the delivery size
+    # that difference is sub-pixel and invisible, but shrinking the comparison
+    # to 320x180 multiplied it by six and turned an identical-looking render
+    # into a 19 dB reading, under the 28 dB floor. A correct GPU path was being
+    # thrown away on this evidence and the whole job dropped back to the CPU;
+    # measured at the real size the same pair of renders scores 35 dB.
+    $probeWidth = 1920
+    $probeHeight = 1080
     $common = @{
         Timeline = $slice
         RenderFrames = $checkFrames
@@ -2116,11 +2142,16 @@ function Test-FilterBackendVisualMatch {
             return $false
         }
         $averagePsnr = if ($match.Groups[1].Value -ieq 'inf') { [double]::PositiveInfinity } else { [double]::Parse($match.Groups[1].Value, [Globalization.CultureInfo]::InvariantCulture) }
-        # A correct GPU path differs from the CPU one only by scaling algorithm
-        # and stays comfortably above 30 dB here. The corrupted Intel iGPU
-        # render that motivated this check measured under 10 dB.
+        # Measured at delivery resolution, a correct GPU path scores in the
+        # mid-30s dB - it differs from the CPU one only by sampling algorithm
+        # and sub-pixel crop placement. The corrupted Intel iGPU render that
+        # motivated this check measured under 10 dB, so the two cases are not
+        # close and this floor sits well clear of both.
         $passed = $averagePsnr -ge 28.0
-        if (-not $passed) {
+        if ($passed) {
+            Write-ToolDiagnostic "GPU motion effects matched the CPU render (average PSNR $averagePsnr dB) and were accepted."
+        }
+        else {
             Write-ToolDiagnostic "GPU motion effects failed the visual match check (average PSNR $averagePsnr dB) and were rejected."
         }
         return $passed

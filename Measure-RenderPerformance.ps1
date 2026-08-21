@@ -104,9 +104,13 @@ function Invoke-Ffmpeg {
 function Select-Encoder {
     if (-not [string]::IsNullOrWhiteSpace($Encoder)) { return $Encoder }
     foreach ($candidate in @('h264_nvenc', 'h264_amf', 'h264_qsv')) {
+        # Probe at delivery resolution, matching Test-VideoEncoder in the tool.
+        # A thumbnail-sized probe sits below NVENC's minimum frame width on
+        # Turing and later, so it would report the wrong encoder here and
+        # measure a pipeline the renderer would never actually use.
         $arguments = @(
             '-hide_banner', '-loglevel', 'error',
-            '-f', 'lavfi', '-i', 'color=c=black:s=64x64:r=1',
+            '-f', 'lavfi', '-i', "color=c=black:s=$($script:Width)x$($script:Height):r=$($script:Fps)",
             '-frames:v', '1', '-c:v', $candidate, '-f', 'null', 'NUL'
         )
         if ($null -ne (Invoke-Ffmpeg -Arguments $arguments -ErrorFile '')) { return $candidate }
