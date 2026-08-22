@@ -131,11 +131,11 @@ $script:DataRoot = Join-Path $env:LOCALAPPDATA 'SlideshowVideoTool'
 # Bumping this invalidates resume directories. Segments rendered by an older
 # pipeline must not be concatenated with segments from a newer one, because the
 # camera motion would visibly change partway through the video.
-# Bumped because the camera motion itself changed: shutter motion blur is gone,
-# so clips are generated once per delivered frame instead of twice and carry no
-# temporal blend. A resume directory holding segments from before this would
-# splice blurred motion onto crisp motion halfway through the video.
-$script:RenderPipelineVersion = 'no-shutter-blur-v14-single-rate-motion'
+# Bumped because motion effects moved back onto the processor. Any segment
+# already on disk may have come from the Vulkan graph, which did not reproduce
+# itself, so resuming onto it could splice a mis-timed stretch into the middle
+# of an otherwise correct video.
+$script:RenderPipelineVersion = 'cpu-motion-effects-v15-reproducible'
 $script:SettingsPath = Join-Path $script:DataRoot 'settings.json'
 $script:PreviewPath = Join-Path $script:DataRoot 'preview.mp4'
 $script:LastErrorPath = Join-Path $script:DataRoot 'last-error.log'
@@ -1104,7 +1104,6 @@ $script:RecommendedParallelSegments = $null
 $script:VulkanDeviceIndex = $null
 $script:FilterBackend = $null
 $script:FilterVulkanDeviceIndex = $null
-$script:FilterBackendCachePath = Join-Path $script:DataRoot 'filter-backend.json'
 $script:EncoderBaseText = ''
 $script:OpenClDevice = $null
 $script:ScreenKernelPath = Join-Path $script:AppRoot 'Shaders\screen.cl'
@@ -2003,266 +2002,6 @@ function Select-AvailableEncoder {
     return $script:SelectedEncoder
 }
 
-function Get-RenderHardwareSignature {
-    $parts = [Collections.Generic.List[string]]::new()
-    $parts.Add($script:RenderPipelineVersion)
-    try {
-        foreach ($processor in @(Get-CimInstance -ClassName Win32_Processor -ErrorAction Stop)) {
-            $parts.Add("CPU:$([string]$processor.Name)")
-        }
-    }
-    catch { $parts.Add("CPU:$([Environment]::ProcessorCount)") }
-    try {
-        foreach ($adapter in @(Get-CimInstance -ClassName Win32_VideoController -ErrorAction Stop | Sort-Object Name)) {
-            $parts.Add("GPU:$([string]$adapter.Name):$([string]$adapter.DriverVersion)")
-        }
-    }
-    catch { $parts.Add('GPU:unknown') }
-    return Get-StableHash ($parts -join '|')
-}
-
-function Get-UsableVulkanFilterDevices {
-    $devices = [Collections.Generic.List[int]]::new()
-    foreach ($deviceIndex in 0..3) {
-        $arguments = @(
-            '-hide_banner', '-loglevel', 'error',
-            '-init_hw_device', "vulkan=filterprobe:$deviceIndex", '-filter_hw_device', 'filterprobe',
-            '-f', 'lavfi', '-i', 'color=c=black:s=320x180:r=1',
-            '-vf', 'format=nv12,hwupload,libplacebo=w=160:h=90:upscaler=lanczos:downscaler=lanczos,hwdownload,format=nv12',
-            '-frames:v', '1', '-f', 'null', 'NUL'
-        )
-        $process = $null
-        try {
-            $startInfo = [Diagnostics.ProcessStartInfo]::new()
-            $startInfo.FileName = $script:FfmpegPath
-            $startInfo.Arguments = Join-ProcessArguments $arguments
-            $startInfo.UseShellExecute = $false
-            $startInfo.CreateNoWindow = $true
-            $startInfo.RedirectStandardOutput = $true
-            $startInfo.RedirectStandardError = $true
-            $process = [Diagnostics.Process]::new()
-            $process.StartInfo = $startInfo
-            if (-not $process.Start()) { continue }
-            [void]$process.StandardOutput.ReadToEnd()
-            [void]$process.StandardError.ReadToEnd()
-            $process.WaitForExit()
-            if ($process.ExitCode -eq 0) { $devices.Add($deviceIndex) }
-        }
-        catch {}
-        finally { if ($null -ne $process) { $process.Dispose() } }
-    }
-    return $devices.ToArray()
-}
-
-function Measure-FilterDefinition {
-    param(
-        [Parameter(Mandatory = $true)][psobject]$Definition,
-        [Parameter(Mandatory = $true)][string]$WatermarkPath,
-        [ValidateSet('cpu','vulkan')][string]$Backend,
-        [int]$VulkanDeviceIndex = 0
-    )
-    $probeRoot = Join-Path $script:DataRoot "filter-probe-$([guid]::NewGuid().ToString('N'))"
-    New-Item -ItemType Directory -Path $probeRoot -Force | Out-Null
-    $filterPath = Join-Path $probeRoot 'filter.txt'
-    $errorPath = Join-Path $probeRoot 'error.log'
-    [IO.File]::WriteAllText($filterPath, [string]$Definition.FilterText, [Text.UTF8Encoding]::new($false))
-    $arguments = [Collections.Generic.List[string]]::new()
-    foreach ($value in @('-y','-hide_banner','-loglevel','error','-nostats')) { $arguments.Add($value) }
-    if ($Backend -eq 'vulkan') {
-        foreach ($value in @('-init_hw_device',"vulkan=filterbench:$VulkanDeviceIndex",'-filter_hw_device','filterbench')) { $arguments.Add($value) }
-    }
-    foreach ($value in @('-f','lavfi','-i','anullsrc=r=48000:cl=stereo','-stream_loop','-1','-i',$WatermarkPath)) { $arguments.Add($value) }
-    foreach ($imagePath in $Definition.ImageInputs) { $arguments.Add('-i'); $arguments.Add([string]$imagePath) }
-    foreach ($value in @('-filter_complex_script',$filterPath,'-map','[vout]','-frames:v',[string][int]$Definition.RenderFrames,'-f','null','NUL')) { $arguments.Add($value) }
-
-    $process = $null
-    try {
-        $startInfo = [Diagnostics.ProcessStartInfo]::new()
-        $startInfo.FileName = $script:FfmpegPath
-        $startInfo.Arguments = Join-ProcessArguments $arguments.ToArray()
-        $startInfo.UseShellExecute = $false
-        $startInfo.CreateNoWindow = $true
-        $startInfo.RedirectStandardOutput = $true
-        $startInfo.RedirectStandardError = $true
-        $process = [Diagnostics.Process]::new()
-        $process.StartInfo = $startInfo
-        $clock = [Diagnostics.Stopwatch]::StartNew()
-        if (-not $process.Start()) { return $null }
-        [void]$process.StandardOutput.ReadToEnd()
-        $errorText = $process.StandardError.ReadToEnd()
-        $process.WaitForExit()
-        $clock.Stop()
-        if ($process.ExitCode -ne 0) {
-            [IO.File]::WriteAllText($errorPath, $errorText, [Text.UTF8Encoding]::new($false))
-            return $null
-        }
-        return $clock.Elapsed.TotalSeconds
-    }
-    catch { return $null }
-    finally {
-        if ($null -ne $process) { $process.Dispose() }
-        try { Remove-Item -LiteralPath $probeRoot -Recurse -Force -ErrorAction SilentlyContinue } catch {}
-    }
-}
-
-function Get-FilterProbeFrames {
-    # Renders a handful of frames to raw RGB24 so two backends' actual pixels
-    # can be compared, not just their exit code. A GPU filter chain can exit
-    # 0 and still hand back corrupted color - an Intel iGPU's Vulkan driver was
-    # found doing exactly that, losing chroma on the hwupload/hwdownload
-    # round-trip and turning every frame a flat green while still exiting
-    # successfully and beating the CPU on time.
-    param(
-        [Parameter(Mandatory = $true)][psobject]$Definition,
-        [Parameter(Mandatory = $true)][string]$WatermarkPath,
-        [ValidateSet('cpu','vulkan')][string]$Backend,
-        [int]$VulkanDeviceIndex = 0,
-        [Parameter(Mandatory = $true)][string]$OutputPath
-    )
-    # The definition's own graph already ends at [vout] sized to whatever
-    # Width/Height it was built with (see Test-FilterBackendVisualMatch), so
-    # capture at that native size. Chaining a simple -vf scale after a
-    # -filter_complex_script output errors: "Simple and complex filtering
-    # cannot be used together for the same stream."
-    $probeRoot = Join-Path $script:DataRoot "filter-probe-$([guid]::NewGuid().ToString('N'))"
-    New-Item -ItemType Directory -Path $probeRoot -Force | Out-Null
-    $filterPath = Join-Path $probeRoot 'filter.txt'
-    [IO.File]::WriteAllText($filterPath, [string]$Definition.FilterText, [Text.UTF8Encoding]::new($false))
-    $arguments = [Collections.Generic.List[string]]::new()
-    foreach ($value in @('-y','-hide_banner','-loglevel','error','-nostats')) { $arguments.Add($value) }
-    if ($Backend -eq 'vulkan') {
-        foreach ($value in @('-init_hw_device',"vulkan=filtercheck:$VulkanDeviceIndex",'-filter_hw_device','filtercheck')) { $arguments.Add($value) }
-    }
-    foreach ($value in @('-f','lavfi','-i','anullsrc=r=48000:cl=stereo','-stream_loop','-1','-i',$WatermarkPath)) { $arguments.Add($value) }
-    foreach ($imagePath in $Definition.ImageInputs) { $arguments.Add('-i'); $arguments.Add([string]$imagePath) }
-    foreach ($value in @('-filter_complex_script',$filterPath,'-map','[vout]','-frames:v',[string][int]$Definition.RenderFrames,'-pix_fmt','rgb24','-f','rawvideo',$OutputPath)) { $arguments.Add($value) }
-
-    $process = $null
-    try {
-        $startInfo = [Diagnostics.ProcessStartInfo]::new()
-        $startInfo.FileName = $script:FfmpegPath
-        $startInfo.Arguments = Join-ProcessArguments $arguments.ToArray()
-        $startInfo.UseShellExecute = $false
-        $startInfo.CreateNoWindow = $true
-        $startInfo.RedirectStandardOutput = $true
-        $startInfo.RedirectStandardError = $true
-        $process = [Diagnostics.Process]::new()
-        $process.StartInfo = $startInfo
-        if (-not $process.Start()) { return $false }
-        [void]$process.StandardOutput.ReadToEnd()
-        [void]$process.StandardError.ReadToEnd()
-        $process.WaitForExit()
-        return ($process.ExitCode -eq 0 -and (Test-Path -LiteralPath $OutputPath -PathType Leaf) -and (Get-Item -LiteralPath $OutputPath).Length -gt 0)
-    }
-    catch { return $false }
-    finally {
-        if ($null -ne $process) { $process.Dispose() }
-        try { Remove-Item -LiteralPath $probeRoot -Recurse -Force -ErrorAction SilentlyContinue } catch {}
-    }
-}
-
-function Test-FilterBackendVisualMatch {
-    # Confirms a GPU candidate's actual pixels resemble the proven CPU path
-    # before trusting it, using PSNR between the same handful of frames from
-    # both. Only the calibration timing win was checked before this existed,
-    # which is how a backend that renders solid green got selected for
-    # producing that green quickly.
-    param(
-        [Parameter(Mandatory = $true)][psobject]$Timeline,
-        [Parameter(Mandatory = $true)][psobject]$Settings,
-        [Parameter(Mandatory = $true)][string]$WatermarkPath,
-        [Parameter(Mandatory = $true)][int]$VulkanDeviceIndex
-    )
-    $checkFrames = [Math]::Min(8, [int]$Timeline.TotalFrames)
-    if ($checkFrames -le 0) { return $false }
-    $slice = New-TimelineSlice -Timeline $Timeline -StartFrame 0 -FrameCount $checkFrames
-    # Rendered directly at this size (not scaled afterward) - both graphs'
-    # own [vout] comes out at whatever Width/Height they were built with.
-    #
-    # Compare at the resolution that ships. The two paths animate differently
-    # by design: zoompan crops on whole input pixels over a 2x canvas, while
-    # libplacebo crops on real numbers over a 1.25x one. At the delivery size
-    # that difference is sub-pixel and invisible, but shrinking the comparison
-    # to 320x180 multiplied it by six and turned an identical-looking render
-    # into a 19 dB reading, under the 28 dB floor. A correct GPU path was being
-    # thrown away on this evidence and the whole job dropped back to the CPU;
-    # measured at the real size the same pair of renders scores 35 dB.
-    $probeWidth = 1920
-    $probeHeight = 1080
-    $common = @{
-        Timeline = $slice
-        RenderFrames = $checkFrames
-        ZoomMaximumPercent = [double]$Settings.ZoomMaximum
-        BlurAmount = [double]$Settings.BlurAmount
-        BackgroundBrightnessPercent = [double]$Settings.BackgroundBrightness
-        Width = $probeWidth
-        Height = $probeHeight
-    }
-    $cpuDefinition = New-FilterGraph @common
-    $gpuDefinition = New-VulkanFilterGraph @common -HardwareOutputFrames $false
-    $cpuFrames = Join-Path $script:DataRoot "filter-check-cpu-$([guid]::NewGuid().ToString('N')).raw"
-    $gpuFrames = Join-Path $script:DataRoot "filter-check-gpu-$([guid]::NewGuid().ToString('N')).raw"
-    try {
-        $cpuOk = Get-FilterProbeFrames -Definition $cpuDefinition -WatermarkPath $WatermarkPath -Backend cpu -OutputPath $cpuFrames
-        $gpuOk = Get-FilterProbeFrames -Definition $gpuDefinition -WatermarkPath $WatermarkPath -Backend vulkan -VulkanDeviceIndex $VulkanDeviceIndex -OutputPath $gpuFrames
-        if (-not $cpuOk -or -not $gpuOk) {
-            Write-ToolDiagnostic 'GPU motion-effect visual check could not render probe frames; keeping CPU.'
-            return $false
-        }
-
-        $arguments = @(
-            '-hide_banner','-loglevel','info','-nostats',
-            '-f','rawvideo','-pix_fmt','rgb24','-s',"$($probeWidth)x$($probeHeight)",'-i',$cpuFrames,
-            '-f','rawvideo','-pix_fmt','rgb24','-s',"$($probeWidth)x$($probeHeight)",'-i',$gpuFrames,
-            '-lavfi','psnr','-f','null','NUL'
-        )
-        $process = $null
-        $errorText = ''
-        try {
-            $startInfo = [Diagnostics.ProcessStartInfo]::new()
-            $startInfo.FileName = $script:FfmpegPath
-            $startInfo.Arguments = Join-ProcessArguments $arguments
-            $startInfo.UseShellExecute = $false
-            $startInfo.CreateNoWindow = $true
-            $startInfo.RedirectStandardOutput = $true
-            $startInfo.RedirectStandardError = $true
-            $process = [Diagnostics.Process]::new()
-            $process.StartInfo = $startInfo
-            if (-not $process.Start()) { return $false }
-            [void]$process.StandardOutput.ReadToEnd()
-            $errorText = $process.StandardError.ReadToEnd()
-            $process.WaitForExit()
-        }
-        catch { return $false }
-        finally { if ($null -ne $process) { $process.Dispose() } }
-
-        # Byte-identical frames report "average:inf", not a number.
-        $match = [Text.RegularExpressions.Regex]::Match($errorText, 'average:\s*(inf|[\d.]+)', [Text.RegularExpressions.RegexOptions]::IgnoreCase)
-        if (-not $match.Success) {
-            Write-ToolDiagnostic "GPU motion-effect visual check produced no PSNR reading; keeping CPU.`r`n$errorText"
-            return $false
-        }
-        $averagePsnr = if ($match.Groups[1].Value -ieq 'inf') { [double]::PositiveInfinity } else { [double]::Parse($match.Groups[1].Value, [Globalization.CultureInfo]::InvariantCulture) }
-        # Measured at delivery resolution, a correct GPU path scores in the
-        # mid-30s dB - it differs from the CPU one only by sampling algorithm
-        # and sub-pixel crop placement. The corrupted Intel iGPU render that
-        # motivated this check measured under 10 dB, so the two cases are not
-        # close and this floor sits well clear of both.
-        $passed = $averagePsnr -ge 28.0
-        if ($passed) {
-            Write-ToolDiagnostic "GPU motion effects matched the CPU render (average PSNR $averagePsnr dB) and were accepted."
-        }
-        else {
-            Write-ToolDiagnostic "GPU motion effects failed the visual match check (average PSNR $averagePsnr dB) and were rejected."
-        }
-        return $passed
-    }
-    finally {
-        Remove-Item -LiteralPath $cpuFrames -Force -ErrorAction SilentlyContinue
-        Remove-Item -LiteralPath $gpuFrames -Force -ErrorAction SilentlyContinue
-    }
-}
-
 function Set-FilterBackendDisplay {
     $base = if ([string]::IsNullOrWhiteSpace($script:EncoderBaseText)) { [string]$EncoderText.Text } else { $script:EncoderBaseText }
     if ($script:FilterBackend -eq 'vulkan') {
@@ -2274,22 +2013,36 @@ function Set-FilterBackendDisplay {
 }
 
 function Set-CpuFilterFallback {
+    # Reached when a render using the Vulkan encoder's filter graph reports a
+    # device failure. Ordinary renders already filter on the processor.
     $script:FilterBackend = 'cpu'
     $script:FilterVulkanDeviceIndex = $null
-    try {
-        $cache = [ordered]@{
-            HardwareSignature = Get-RenderHardwareSignature
-            Backend = 'cpu'
-            VulkanDeviceIndex = -1
-            UpdatedUtc = [DateTime]::UtcNow.ToString('o')
-        }
-        [IO.File]::WriteAllText($script:FilterBackendCachePath, ($cache | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
-    }
-    catch { Write-ToolDiagnostic 'The safe CPU filter fallback could not be cached.' $_.Exception }
     Set-FilterBackendDisplay
 }
 
 function Select-AvailableFilterBackend {
+    # Motion effects run on the processor. There is a Vulkan/libplacebo graph
+    # in the engine and it is genuinely faster, but it does not reproduce
+    # itself: rendering one 30-second segment repeatedly from identical inputs
+    # on an RTX A4000 produced different videos, differing by 14 to 19 dB -
+    # whole clips landing on the wrong photograph, some of them nearly black.
+    # The processor graph rendered the same segment identically every time.
+    #
+    # It was chosen once and rejected before, so this is not new; what changed
+    # is that the tool started reaching it. It stayed unreachable for a
+    # different reason than anyone thought, and one delivered 21-minute video
+    # is what it cost to find out.
+    #
+    # It is also no longer worth the risk. That graph earned its place when
+    # every frame was generated twice for shutter blur; with that gone it
+    # measured 33.7 seconds against the processor's 34.3 on the same
+    # photographs and lane count - two percent - so this trades nothing for a
+    # video that is right every time.
+    #
+    # Vulkan's own H.264 encoder is the one exception. It only accepts frames
+    # that are already on the graphics card, so it has no processor path to
+    # fall back to, and it is itself only reached when NVENC, AMF and Quick
+    # Sync have all been ruled out.
     param(
         [Parameter(Mandatory = $true)][psobject]$Timeline,
         [Parameter(Mandatory = $true)][psobject]$Settings,
@@ -2304,87 +2057,14 @@ function Select-AvailableFilterBackend {
         $script:FilterBackend = 'vulkan'
         $script:FilterVulkanDeviceIndex = [int]$script:VulkanDeviceIndex
         Set-FilterBackendDisplay
+        Write-ToolDiagnostic "Filter backend selected. Backend=vulkan VulkanDevice=$($script:FilterVulkanDeviceIndex) (required by the Vulkan encoder)"
         return $script:FilterBackend
     }
 
-    $hardwareSignature = Get-RenderHardwareSignature
-    if (Test-Path -LiteralPath $script:FilterBackendCachePath -PathType Leaf) {
-        try {
-            $cached = [IO.File]::ReadAllText($script:FilterBackendCachePath, [Text.Encoding]::UTF8) | ConvertFrom-Json
-            if ([string]$cached.HardwareSignature -eq $hardwareSignature -and [string]$cached.Backend -in @('cpu','vulkan')) {
-                if ([string]$cached.Backend -eq 'cpu') {
-                    $script:FilterBackend = 'cpu'
-                    Set-FilterBackendDisplay
-                    return $script:FilterBackend
-                }
-                $usableCachedDevices = @(Get-UsableVulkanFilterDevices)
-                if ($usableCachedDevices -contains [int]$cached.VulkanDeviceIndex) {
-                    $script:FilterBackend = 'vulkan'
-                    $script:FilterVulkanDeviceIndex = [int]$cached.VulkanDeviceIndex
-                    Set-FilterBackendDisplay
-                    return $script:FilterBackend
-                }
-            }
-        }
-        catch { Write-ToolDiagnostic 'The cached filter-backend choice could not be read.' $_.Exception }
-    }
-
-    $devices = @(Get-UsableVulkanFilterDevices)
-    if ($devices.Count -eq 0) {
-        $script:FilterBackend = 'cpu'
-    }
-    else {
-        $StatusText.Text = 'Calibrating full-quality motion effects for this laptop...'
-        $window.Dispatcher.Invoke([action]{}, [Windows.Threading.DispatcherPriority]::Background)
-        $benchmarkFrames = [Math]::Min(48, [int]$Timeline.TotalFrames)
-        $slice = New-TimelineSlice -Timeline $Timeline -StartFrame 0 -FrameCount $benchmarkFrames
-        $common = @{
-            Timeline = $slice
-            RenderFrames = $benchmarkFrames
-            ZoomMaximumPercent = [double]$Settings.ZoomMaximum
-            BlurAmount = [double]$Settings.BlurAmount
-            BackgroundBrightnessPercent = [double]$Settings.BackgroundBrightness
-            Width = 1920
-            Height = 1080
-        }
-        $cpuDefinition = New-FilterGraph @common
-        # Warm the source-image and watermark caches before timing either path.
-        [void](Measure-FilterDefinition -Definition $cpuDefinition -WatermarkPath $WatermarkPath -Backend cpu)
-        $cpuSeconds = Measure-FilterDefinition -Definition $cpuDefinition -WatermarkPath $WatermarkPath -Backend cpu
-        $bestSeconds = $cpuSeconds
-        $bestDevice = $null
-        foreach ($deviceIndex in $devices) {
-            $gpuDefinition = New-VulkanFilterGraph @common -HardwareOutputFrames $false
-            $gpuSeconds = Measure-FilterDefinition -Definition $gpuDefinition -WatermarkPath $WatermarkPath -Backend vulkan -VulkanDeviceIndex $deviceIndex
-            if ($null -ne $gpuSeconds -and ($null -eq $bestSeconds -or $gpuSeconds -lt $bestSeconds)) {
-                $bestSeconds = $gpuSeconds
-                $bestDevice = [int]$deviceIndex
-            }
-        }
-        # A small win can disappear with different photographs or background
-        # activity. Require an eight-percent margin before changing pipelines.
-        if ($null -ne $bestDevice -and $null -ne $cpuSeconds -and $bestSeconds -le ($cpuSeconds * 0.92) -and
-            (Test-FilterBackendVisualMatch -Timeline $Timeline -Settings $Settings -WatermarkPath $WatermarkPath -VulkanDeviceIndex $bestDevice)) {
-            $script:FilterBackend = 'vulkan'
-            $script:FilterVulkanDeviceIndex = $bestDevice
-        }
-        else {
-            $script:FilterBackend = 'cpu'
-        }
-    }
-
-    try {
-        $cache = [ordered]@{
-            HardwareSignature = $hardwareSignature
-            Backend = $script:FilterBackend
-            VulkanDeviceIndex = if ($null -eq $script:FilterVulkanDeviceIndex) { -1 } else { [int]$script:FilterVulkanDeviceIndex }
-            UpdatedUtc = [DateTime]::UtcNow.ToString('o')
-        }
-        [IO.File]::WriteAllText($script:FilterBackendCachePath, ($cache | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
-    }
-    catch { Write-ToolDiagnostic 'The filter-backend choice could not be cached.' $_.Exception }
+    $script:FilterBackend = 'cpu'
+    $script:FilterVulkanDeviceIndex = $null
     Set-FilterBackendDisplay
-    Write-ToolDiagnostic "Filter backend selected. Backend=$($script:FilterBackend) VulkanDevice=$($script:FilterVulkanDeviceIndex)"
+    Write-ToolDiagnostic 'Filter backend selected. Backend=cpu'
     return $script:FilterBackend
 }
 

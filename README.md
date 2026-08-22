@@ -208,7 +208,7 @@ The tool measures the machine it finds itself on rather than assuming:
 | It checks | What it does with the answer |
 |---|---|
 | Video encoder | Probes NVIDIA NVENC, then AMD AMF, then NVIDIA Vulkan, then Intel Quick Sync, and finally falls back to CPU encoding. Each probe encodes a real 1920x1080 frame, because hardware encoders reject frames below a minimum size and would otherwise report themselves as missing. The chosen one is named in the top-right of the window. |
-| Motion-effects processor | Times the unchanged full-quality CPU graph against every compatible Vulkan GPU on the first render, then compares the two renders' actual pixels at full 1920x1080. It uses a GPU only when it wins by at least 8% and matches the CPU render; the per-machine result is cached. |
+| Motion-effects processor | Always the processor. A Vulkan graph exists and is faster, but it does not reproduce itself — see **GPU acceleration** below. |
 | Processor cores and installed memory | Picks how many 30-second segments render at once — 1 lane on a small laptop, up to 6 on a workstation. |
 | OpenCL device | Only used for the GPU watermark and caption compositor, and only on NVIDIA. Every other machine does that step on the CPU, with identical output. |
 
@@ -272,32 +272,31 @@ Quadro P620 driver provides. The included FFmpeg 7.1.1 build uses a compatible
 NVENC API, so H.264 encoding works on the P620 without downgrading the NVIDIA
 driver.
 
-The first render on a new machine performs a short calibration using the actual
-project media. It compares the existing CPU motion graph with every usable Vulkan
-device, after warming the file cache, and requires the GPU to win by at least eight
-percent. The winner then has to prove it looks right: eight frames from each path
-are rendered at the full 1920x1080 delivery size and compared with PSNR, and the
-GPU is used only above 28 dB. That comparison is made at delivery size on purpose.
-The two paths place their crop differently by a fraction of a pixel — invisible in
-the finished video — and measuring a shrunken copy magnifies that fraction until a
-correct GPU render looks like a broken one. The choice is stored in
-`%LOCALAPPDATA%\SlideshowVideoTool\filter-backend.json` and is automatically
-invalidated by a renderer update, CPU/GPU change, or graphics driver update. A
-failed, slower, or visually mismatched GPU probe keeps the proven CPU renderer.
+Motion effects run on the processor. The engine also contains a Vulkan/libplacebo
+graph that performs the animated crop on the graphics card, and it is not used.
 
-Both paths retain 1920x1080 delivery, 24 FPS output, Lanczos photo resampling,
-RGB Screen blending, caption styling, and the selected encoder quality/bitrate. The Vulkan path changes
-where the animated fractional crop runs, not those quality decisions. Its real-number
-crop needs only enough source overscan to avoid upscaling; the CPU `zoompan` path
-keeps its larger 2x canvas to avoid whole-pixel stepping.
+It does not reproduce itself. Rendering one 30-second segment repeatedly from
+identical inputs on an RTX A4000 produced a different video each time, differing by
+14 to 19 dB: whole clips landed on the wrong photograph and some came out nearly
+black. The processor graph rendered the same segment identically on every run, at
+six lanes as well as one. A renderer that is usually right is worse than a slower
+one that is always right, because nothing downstream can tell the difference until
+somebody watches the finished video.
+
+It is also no longer worth the risk. That graph earned its place when every frame
+was generated twice for shutter blur; with that gone it measured 33.7 seconds
+against the processor's 34.3 on the same photographs and lane count — two percent.
+
+Vulkan's own H.264 encoder is the one exception and still uses that graph, because
+it only accepts frames that are already on the graphics card. It is reached only
+when NVENC, AMF and Quick Sync have all been ruled out.
 
 Several independent 30-second segments render simultaneously on a machine with
 enough CPU and memory, up to six. An 8 GB laptop remains at one lane to avoid paging. Selecting
 **SRT only** is the fastest caption mode because no caption pixels are rendered into
 the video. GPU utilization still need not read 100 percent: decode, static photo
 preparation, RGB Screen blending, captions, and encoding use different CPU/GPU
-engines. The top-right status names both the encoder and whether motion effects use
-the CPU or the calibrated Vulkan GPU.
+engines. The top-right status names both the encoder and where motion effects run.
 
 The bundled FFmpeg build retains its original `LICENSE` and `README.txt`; FFmpeg
 is free software distributed under its applicable LGPL/GPL terms.
