@@ -49,8 +49,8 @@ foreach ($duration in $durations) {
         Assert-True ($graph.FilterText -match 'blend=all_mode=screen:shortest=0:repeatlast=1') 'Screen watermark blend and exact-length behavior'
         Assert-True ($graph.FilterText -match 'format=gbrp') 'Screen blend is performed in RGB color space'
         Assert-True ($graph.FilterText -match 'zoompan=') 'Zoom animation filter'
-        Assert-True ($graph.FilterText -match 'fps=48') 'CPU zoom is generated at twice the delivery frame rate'
-        Assert-True ($graph.FilterText -match "tmix=frames=3:weights='1 2 1'") 'CPU zoom receives subtle temporal motion blur'
+        Assert-True ($graph.FilterText -match 'fps=24') 'CPU zoom is generated once per delivered frame'
+        Assert-True (-not ($graph.FilterText -match 'tmix=')) 'CPU zoom carries no temporal blend'
         Assert-True ($graph.FilterText -match 'gblur=') 'Blurred background filter'
         Assert-True (-not $graph.FilterText.TrimEnd().EndsWith(';')) 'Filter graph has no empty trailing chain'
 
@@ -85,7 +85,7 @@ foreach ($duration in $durations) {
         Assert-True (-not ($gpuGraph.FilterText -match "crop_x='[^']*2\*min")) 'Vulkan pan offset does not vary with progress'
         Assert-True (-not ($gpuGraph.FilterText -match "crop_y='[^']*2\*min")) 'Vulkan vertical pan offset does not vary with progress'
         Assert-True ($gpuGraph.FilterText -match 'peak_detect=0') 'Vulkan path skips unnecessary HDR analysis'
-        Assert-True ($gpuGraph.FilterText -match 'fps=48,format=nv12,hwupload,loop=') 'Vulkan zoom is generated at twice the delivery frame rate, from a single upload'
+        Assert-True ($gpuGraph.FilterText -match 'fps=24,format=nv12,hwupload,loop=') 'Vulkan zoom is generated once per delivered frame, from a single upload'
         # A still image looped after the upload is sent to the card once. Looped
         # before it, the same canvas crossed the bus 48 times a second.
         Assert-True (-not ($gpuGraph.FilterText -match 'loop=loop=\d+:size=1:start=0,trim=end_frame=\d+,setpts=PTS-STARTPTS,format=nv12,hwupload')) 'Vulkan path does not re-upload the same still frame every frame'
@@ -104,7 +104,7 @@ foreach ($duration in $durations) {
             -HardwareOutputFrames $false
         Assert-True ($gpuSoftwareOut.FilterText -match '\[composited\]null\[vout\]') 'Vulkan filtering can hand finished frames to a non-Vulkan encoder'
         Assert-True ($gpuGraph.FilterText -match '\[composited\]format=nv12,hwupload\[vout\]') 'Vulkan encoder still receives hardware frames'
-        Assert-True ($gpuGraph.FilterText -match "tmix=frames=3:weights='1 2 1'") 'Vulkan zoom receives subtle temporal motion blur'
+        Assert-True (-not ($gpuGraph.FilterText -match 'tmix=')) 'Vulkan zoom carries no temporal blend'
         Assert-True (-not ($gpuGraph.FilterText -match 'zoompan=')) 'Vulkan path avoids CPU zoompan'
         Assert-True (-not $gpuGraph.FilterText.TrimEnd().EndsWith(';')) 'Vulkan graph has no empty trailing chain'
 

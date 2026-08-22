@@ -152,18 +152,6 @@ function New-SyntheticImages {
 # produces verbatim; if a variant stops matching after an engine change it
 # reports "graph unchanged" rather than quietly timing the full graph again.
 
-function Remove-MotionBlur {
-    # Undo the doubled frame rate and the temporal blend that consumes it, so
-    # the difference is the true cost of generating motion at 48 FPS.
-    param([string]$Text)
-    $result = [regex]::Replace($Text, "d=(\d+):s=$($script:Width)x$($script:Height):fps=$($script:Fps * 2)", {
-        param($match)
-        $halved = [int]([int]$match.Groups[1].Value / 2)
-        "d=$halved`:s=$($script:Width)x$($script:Height):fps=$($script:Fps)"
-    })
-    return $result.Replace("tmix=frames=3:weights='1 2 1',", '')
-}
-
 function Remove-BackgroundBlur {
     param([string]$Text)
     return [regex]::Replace($Text, 'gblur=sigma=[0-9.]+,', '')
@@ -313,7 +301,6 @@ Write-Host ''
 
 $variants = @(
     @{ Name = 'Everything on'; Text = $baseline }
-    @{ Name = 'No motion blur (24 fps generation)'; Text = (Remove-MotionBlur $baseline) }
     @{ Name = 'No background blur'; Text = (Remove-BackgroundBlur $baseline) }
     @{ Name = 'Overscan canvas 1.25x not 2x'; Text = (Remove-OverscanCanvas $baseline) }
     @{ Name = 'No watermark screen blend'; Text = (Remove-WatermarkBlend $baseline) }
