@@ -1,4 +1,4 @@
-Set-StrictMode -Version Latest
+﻿Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -21,7 +21,7 @@ foreach ($duration in $durations) {
             -AudioDurationSeconds $duration `
             -MinimumDurationSeconds 5.0 `
             -MaximumDurationSeconds 7.0 `
-            -Fps 24 `
+            -Fps 30 `
             -Seed $seed
 
         $frameSum = ($plan.Items | Measure-Object Frames -Sum).Sum
@@ -48,8 +48,11 @@ foreach ($duration in $durations) {
         Assert-True ($graph.RenderFrames -eq $previewFrames) 'Preview frame count'
         Assert-True ($graph.FilterText -match 'blend=all_mode=screen:shortest=0:repeatlast=1') 'Screen watermark blend and exact-length behavior'
         Assert-True ($graph.FilterText -match 'format=gbrp') 'Screen blend is performed in RGB color space'
-        Assert-True ($graph.FilterText -match 'zoompan=') 'Zoom animation filter'
-        Assert-True ($graph.FilterText -match 'fps=24') 'CPU zoom is generated once per delivered frame'
+        Assert-True ($graph.FilterText -match 'perspective=') 'Zoom animation filter'
+        Assert-True (-not ($graph.FilterText -match 'zoompan=')) 'CPU zoom does not use whole-pixel cropping'
+        Assert-True ($graph.FilterText -match 'sense=source:eval=frame') 'CPU crop is re-evaluated every frame in source coordinates'
+        Assert-True ($graph.FilterText -match 'interpolation=cubic') 'CPU crop samples between pixels rather than snapping to them'
+        Assert-True ($graph.FilterText -match 'fps=30') 'CPU zoom is generated once per delivered frame'
         Assert-True (-not ($graph.FilterText -match 'tmix=')) 'CPU zoom carries no temporal blend'
         Assert-True ($graph.FilterText -match 'gblur=') 'Blurred background filter'
         Assert-True (-not $graph.FilterText.TrimEnd().EndsWith(';')) 'Filter graph has no empty trailing chain'
@@ -71,8 +74,8 @@ foreach ($duration in $durations) {
         Assert-True ($gpuGraph.FilterText -match 'upscaler=lanczos') 'Vulkan path uses a stable high-quality photo resampler'
         Assert-True (-not ($graph.FilterText -match 'cos\(')) 'CPU zoom moves at a constant rate with no easing'
         Assert-True (-not ($gpuGraph.FilterText -match 'cos\(')) 'Vulkan zoom moves at a constant rate with no easing'
-        Assert-True ($graph.FilterText -match '\(\(iw-iw/zoom\)/2\)') 'CPU crop offset is anchored to the zoom margin'
-        Assert-True ($graph.FilterText -match '\(\(ih-ih/zoom\)/2\)') 'CPU vertical crop offset is anchored to the zoom margin'
+        Assert-True ($graph.FilterText -match '\(\(W-\(W/') 'CPU crop offset is anchored to the zoom margin'
+        Assert-True ($graph.FilterText -match '\(\(H-\(H/') 'CPU vertical crop offset is anchored to the zoom margin'
         Assert-True ($gpuGraph.FilterText -match '\(\(iw-cw\)/2\)') 'Vulkan crop offset is anchored to the zoom margin'
         Assert-True ($gpuGraph.FilterText -match '\(\(ih-ch\)/2\)') 'Vulkan vertical crop offset is anchored to the zoom margin'
         Assert-True ($graph.FilterText -match '\*\(1[-+]0\.5\)') 'CPU zoom applies the pan offset'
@@ -85,15 +88,28 @@ foreach ($duration in $durations) {
         Assert-True (-not ($gpuGraph.FilterText -match "crop_x='[^']*2\*min")) 'Vulkan pan offset does not vary with progress'
         Assert-True (-not ($gpuGraph.FilterText -match "crop_y='[^']*2\*min")) 'Vulkan vertical pan offset does not vary with progress'
         Assert-True ($gpuGraph.FilterText -match 'peak_detect=0') 'Vulkan path skips unnecessary HDR analysis'
-        Assert-True ($gpuGraph.FilterText -match 'fps=24,format=nv12,hwupload,loop=') 'Vulkan zoom is generated once per delivered frame, from a single upload'
+        Assert-True ($gpuGraph.FilterText -match 'fps=30,format=nv12,hwupload,loop=') 'Vulkan zoom is generated once per delivered frame, from a single upload'
+        # The loop filter hands out copies of one uploaded frame, and every copy
+        # carries that frame's timestamp. Left alone, a time-driven crop reads
+        # the same instant for the whole clip and the motion never starts.
+        Assert-True ($gpuGraph.FilterText -match 'setpts=N/\(30\*TB\),libplacebo=') 'Vulkan clip rebuilds timestamps from the frame counter before the crop'
+        Assert-True (-not ($gpuGraph.FilterText -match "crop_w='[^']*t\*")) 'Vulkan crop is driven by frame number, not by a timestamp the loop never advances'
         # A still image looped after the upload is sent to the card once. Looped
         # before it, the same canvas crossed the bus 48 times a second.
         Assert-True (-not ($gpuGraph.FilterText -match 'loop=loop=\d+:size=1:start=0,trim=end_frame=\d+,setpts=PTS-STARTPTS,format=nv12,hwupload')) 'Vulkan path does not re-upload the same still frame every frame'
-        # The crop is computed on real numbers here, so this canvas exists only
-        # to keep the most magnified crop from being an upscale. 2400x1350
-        # divided by the 1.1 zoom ceiling still exceeds 1920x1080.
-        Assert-True ($gpuGraph.FilterText -match 'scale=2400:1350') 'Vulkan path prepares enough overscan to avoid upscaling at maximum zoom'
-        Assert-True (-not ($gpuGraph.FilterText -match 'scale=3840:2160')) 'Vulkan path does not carry the CPU renderer''s oversized canvas'
+        # Both renderers crop on real numbers, so the canvas exists only to keep
+        # the most magnified crop from becoming an upscale: 2112x1188 divided by
+        # the 1.1 zoom ceiling is exactly 1920x1080. Overscan beyond that was
+        # measured to buy no smoothness at all - zoompan sat at 18.8 percent
+        # frame-to-frame variance on a 2x canvas and 12.8 percent on a 4x one -
+        # while costing render time in direct proportion to its area.
+        Assert-True ($gpuGraph.FilterText -match 'scale=2112:1188') 'Vulkan path prepares enough overscan to avoid upscaling at maximum zoom'
+        # Overscan sized by measurement, not by zoompan's old rounding problem:
+        # structural similarity to a reference frame flattens after 1.5x.
+        Assert-True ($graph.FilterText -match 'scale=2112:1188') 'CPU path prepares enough overscan to hold detail at maximum zoom'
+        Assert-True (-not ($graph.FilterText -match 'scale=3840:2160')) 'CPU path no longer carries the oversized zoompan canvas'
+        # Sharpening scored worse against that reference in every configuration.
+        Assert-True (-not ($graph.FilterText -match 'unsharp=')) 'CPU path does not manufacture edge energy'
 
         $gpuSoftwareOut = New-VulkanFilterGraph `
             -Timeline $plan `
@@ -138,7 +154,7 @@ Assert-True ($youtube -contains '-g') 'YouTube keyframe interval'
 
 $captionGraph = New-FilterGraph -Timeline $plan -RenderFrames 240 -SubtitlePath 'C:\captions\video.srt'
 Assert-True ($captionGraph.FilterText -match 'subtitles=') 'Optional burned captions filter'
-Assert-True ($captionGraph.FilterText -match 'zoompan=') 'Captioned graph remains animated'
+Assert-True ($captionGraph.FilterText -match 'perspective=') 'Captioned graph remains animated'
 
 $openClGraph = New-FilterGraph -Timeline $plan -RenderFrames 240 -OpenClScreenKernelPath 'C:\app\Shaders\screen.cl'
 Assert-True ($openClGraph.FilterText -match 'program_opencl=.*kernel=screen_rgb') 'GPU Screen compositor is selected'

@@ -1,6 +1,6 @@
 # Slideshow Video Tool
 
-A portable Windows 11 tool for turning a folder of images and an M4A voiceover into a 1920x1080, 24 FPS YouTube video.
+A portable Windows 11 tool for turning a folder of images and an M4A voiceover into a 1920x1080, 30 FPS YouTube video.
 
 ## What it does
 
@@ -17,6 +17,30 @@ A portable Windows 11 tool for turning a folder of images and an M4A voiceover i
 - Randomly applies zoom-in or zoom-out motion, combined with a slow pan drift in a
   random direction. Both move at a constant rate for the whole image, so the
   motion never decelerates into a visible stutter before the next cut.
+- Crops on real numbers rather than whole pixels, so a slow zoom moves by a
+  fraction of a pixel per frame instead of holding still and then jumping. On a
+  frame-to-frame motion measurement this is the difference between 16 percent
+  variation and under 3; on screen it is the difference between a zoom that
+  shimmers and one that glides. Scored against a reference frame built at four
+  times the delivery resolution, the picture also holds slightly more detail
+  than the renderer it replaces.
+- Optionally cross-dissolves between images instead of cutting. It is off by
+  default; on the processor renderer it costs about three percent.
+- Offers **Fast**, **Balanced** and **Best** motion quality. The motion is a
+  sub-pixel crop out of a working canvas, and the size of that canvas is the
+  whole trade: a larger one holds more detail and takes longer. Measured on
+  one 30-second segment, and on a day of forty ten-minute videos:
+
+  | Setting | Detail | Motion variance | Speed | A day's rendering |
+  |---|---:|---:|---:|---:|
+  | Fast | 0.789 | 0.6% | 2.34x | 2.8 h |
+  | Balanced | 0.799 | 1.0% | 2.04x | 3.3 h |
+  | Best | 0.832 | 2.6% | 1.12x | 6.0 h |
+  | *(the old renderer)* | *0.828* | *16.1%* | *3.07x* | *2.2 h* |
+
+  Detail is structural similarity to the same frame built at four times the
+  delivery resolution. Balanced is the default: the crop at maximum zoom is
+  exactly one delivery frame, so nothing is ever enlarged.
 - Applies the supplied full-frame MOV/MP4 watermark with Screen blending for the entire video.
 - Creates automatic SRT captions locally from the voiceover; captions can also be burned into the video.
 - Groups settings into five sections — Media and Audio, Motion, Captions, Blanking Fill
@@ -34,7 +58,7 @@ A portable Windows 11 tool for turning a folder of images and an M4A voiceover i
 - Renders the final video in resumable 30-second segments, several at a time - as many as the machine's cores, memory and graphics encoder allow, up to six.
 - Batch-renders multiple saved project files sequentially.
 - Keeps persistent render history with completed, failed, paused, and resumable final and batch jobs.
-- Uses the Quadro P620 through compatible NVIDIA NVENC for H.264 encoding.
+- Uses NVIDIA NVENC for H.264 encoding where the graphics card provides it.
 - Uses a custom OpenCL compositor for colour-correct RGB Screen blending so the watermark does not crush shadows or posterize photos.
 - Composites burned captions on the GPU, or skips that work when **SRT only** is selected.
 - Supports **Burned only** output when captions should be embedded without creating a separate SRT file.

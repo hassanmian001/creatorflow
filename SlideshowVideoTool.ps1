@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param()
 
 Set-StrictMode -Version Latest
@@ -575,7 +575,7 @@ $xaml = @'
                     <Border Background="{StaticResource SunkenBrush}" BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="5" Padding="11,9">
                         <StackPanel>
                             <TextBlock Text="OUTPUT" Foreground="{StaticResource MutedBrush}" FontSize="10" FontWeight="Bold"/>
-                            <TextBlock Text="1920x1080  24 fps  H.264" Foreground="{StaticResource DimBrush}" FontFamily="Consolas" FontSize="11.5" Margin="0,4,0,0"/>
+                            <TextBlock Text="1920x1080  30 fps  H.264" Foreground="{StaticResource DimBrush}" FontFamily="Consolas" FontSize="11.5" Margin="0,4,0,0"/>
                         </StackPanel>
                     </Border>
                 </StackPanel>
@@ -615,7 +615,7 @@ $xaml = @'
                     </Canvas>
 
                     <Border VerticalAlignment="Top" HorizontalAlignment="Right" Background="#C60C0C0E" BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="4" Padding="8,4" Margin="11">
-                        <TextBlock Text="1920x1080  |  24 fps" Foreground="{StaticResource DimBrush}" FontFamily="Consolas" FontSize="10.5"/>
+                        <TextBlock Text="1920x1080  |  30 fps" Foreground="{StaticResource DimBrush}" FontFamily="Consolas" FontSize="10.5"/>
                     </Border>
 
                     <Border VerticalAlignment="Bottom" Padding="12,9">
@@ -719,10 +719,22 @@ $xaml = @'
                             <Grid Margin="0,3"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="76"/></Grid.ColumnDefinitions>
                                 <TextBlock Text="Maximum zoom %" Style="{StaticResource RowLabel}"/>
                                 <TextBox x:Name="ZoomText" Grid.Column="1" Text="110" HorizontalContentAlignment="Center"/></Grid>
+                            <Grid Margin="0,14,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="118"/></Grid.ColumnDefinitions>
+                                <TextBlock Text="Motion quality" Style="{StaticResource RowLabel}"/>
+                                <ComboBox x:Name="MotionQualityCombo" Grid.Column="1" SelectedIndex="1">
+                                    <ComboBoxItem Content="Fast"/>
+                                    <ComboBoxItem Content="Balanced"/>
+                                    <ComboBoxItem Content="Best"/>
+                                </ComboBox></Grid>
+                            <CheckBox x:Name="CrossfadeCheckBox" Content="Cross-dissolve between images" Margin="0,14,0,0"/>
+                            <Grid x:Name="CrossfadeDurationRow" Margin="0,7,0,0" IsEnabled="False"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="76"/></Grid.ColumnDefinitions>
+                                <TextBlock Text="Dissolve seconds" Style="{StaticResource RowLabel}"/>
+                                <TextBox x:Name="CrossfadeSecondsText" Grid.Column="1" Text="0.5" HorizontalContentAlignment="Center"/></Grid>
                             <Border BorderBrush="{StaticResource StrongLineBrush}" BorderThickness="2,0,0,0" Padding="11,2" Margin="1,20,0,0">
                                 <StackPanel>
                                     <TextBlock Text="Each image holds for a random time inside this range." Style="{StaticResource NoteText}"/>
                                     <TextBlock Text="It also zooms in or out and drifts slowly across one axis. Both move at a constant rate, so the motion never stalls before a cut." Style="{StaticResource NoteText}" Margin="0,6,0,0"/>
+                                    <TextBlock x:Name="CrossfadeNoteText" Text="Images cut straight from one to the next. A dissolve looks more finished, but measured about a third slower to render, because both images have to be drawn during the overlap." Style="{StaticResource NoteText}" Margin="0,6,0,0"/>
                                 </StackPanel>
                             </Border>
                         </StackPanel>
@@ -864,7 +876,7 @@ $xaml = @'
                                 </ComboBox></Grid>
                             <Grid Margin="0,9"><Grid.ColumnDefinitions><ColumnDefinition Width="104"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                                 <TextBlock Text="Format" Style="{StaticResource RowLabel}"/>
-                                <TextBlock Grid.Column="1" Text="1080p  H.264  24 fps" Foreground="{StaticResource DimBrush}" FontFamily="Consolas" FontSize="11.5"/></Grid>
+                                <TextBlock Grid.Column="1" Text="1080p  H.264  30 fps" Foreground="{StaticResource DimBrush}" FontFamily="Consolas" FontSize="11.5"/></Grid>
                             <Grid Margin="0,3"><Grid.ColumnDefinitions><ColumnDefinition Width="104"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                                 <TextBlock Text="Estimated size" Style="{StaticResource RowLabel}"/>
                                 <TextBlock x:Name="EstimateText" Grid.Column="1" Text="Scan voiceover first" Foreground="{StaticResource AccentBrush}" FontSize="12"/></Grid>
@@ -924,6 +936,7 @@ $controlNames = @(
     'RootGrid', 'NavigationColumn', 'NavigationPanel', 'SettingsColumn', 'SettingsPanel', 'PlayerPanel', 'StatusPanel',
     'EncoderText', 'OpenProjectButton', 'SaveProjectButton', 'BatchButton', 'RenderHistoryButton',
     'CheckUpdatesButton', 'AppSubtitleText',
+    'MotionQualityCombo', 'CrossfadeCheckBox', 'CrossfadeSecondsText', 'CrossfadeDurationRow',
     'NavMediaButton', 'NavMotionButton', 'NavCaptionsButton', 'NavBlankingButton', 'NavExportButton',
     'SectionTitleText', 'SectionHintText',
     'SectionMedia', 'SectionMotion', 'SectionCaptions', 'SectionBlanking', 'SectionExport',
@@ -1100,6 +1113,14 @@ $script:IsLoading = $true
 $script:FfmpegPath = $null
 $script:FfprobePath = $null
 $script:SelectedEncoder = $null
+# 30, not 24. A 24 FPS video played on a 60 Hz screen - which is nearly every
+# screen this lands on - cannot be shown evenly: 3:2 pulldown holds one frame
+# for 50 ms and the next for 33 ms. Film hides that behind the motion blur of a
+# 1/48 second shutter, but this motion is synthetic and perfectly sharp, so
+# there is nothing to hide it, and a slow zoom is exactly the case where the
+# uneven cadence is most visible. 30 divides into 60 evenly and the judder goes
+# away for 25 percent more frames.
+$script:DeliveryFps = 30
 $script:RecommendedParallelSegments = $null
 $script:VulkanDeviceIndex = $null
 $script:FilterBackend = $null
@@ -1501,6 +1522,16 @@ function Get-UiSettings {
     if ($zoom -lt 100 -or $zoom -gt 150) {
         throw 'Maximum zoom must be between 100% and 150%.'
     }
+    $crossfade = [bool]$CrossfadeCheckBox.IsChecked
+    $crossfadeSeconds = 0.0
+    if ($crossfade) {
+        if (-not [double]::TryParse($CrossfadeSecondsText.Text.Trim(), [Globalization.NumberStyles]::Float, $script:InvariantCulture, [ref]$crossfadeSeconds)) {
+            throw 'Dissolve length must be a number of seconds such as 0.5.'
+        }
+        if ($crossfadeSeconds -lt 0.1 -or $crossfadeSeconds -gt 2.0) {
+            throw 'Dissolve length must be between 0.1 and 2.0 seconds.'
+        }
+    }
     foreach ($colorControl in @($CaptionTextColorText, $CaptionOutlineColorText, $CaptionBackgroundColorText)) {
         if ($colorControl.Text.Trim() -notmatch '^#[0-9A-Fa-f]{6}$') {
             throw 'Caption colors must use six-digit hex values such as #FFFFFF or #000000.'
@@ -1511,6 +1542,9 @@ function Get-UiSettings {
         MinimumDuration = $minimum
         MaximumDuration = $maximum
         ZoomMaximum = $zoom
+        MotionQuality = Get-ComboText $MotionQualityCombo
+        Crossfade = $crossfade
+        CrossfadeSeconds = $crossfadeSeconds
         BlurAmount = [double]$BlurSlider.Value
         BackgroundBrightness = [double]$BrightnessSlider.Value
         Quality = Get-ComboText $QualityCombo
@@ -1558,6 +1592,9 @@ function Load-UserSettings {
         if ($null -ne $settings.MinimumDuration) { $MinimumDurationText.Text = [string]$settings.MinimumDuration }
         if ($null -ne $settings.MaximumDuration) { $MaximumDurationText.Text = [string]$settings.MaximumDuration }
         if ($null -ne $settings.ZoomMaximum) { $ZoomText.Text = [string]$settings.ZoomMaximum }
+        if ($null -ne $settings.PSObject.Properties['MotionQuality']) { Set-ComboText $MotionQualityCombo ([string]$settings.MotionQuality) }
+        if ($null -ne $settings.PSObject.Properties['Crossfade']) { $CrossfadeCheckBox.IsChecked = [bool]$settings.Crossfade }
+        if ($null -ne $settings.PSObject.Properties['CrossfadeSeconds'] -and [double]$settings.CrossfadeSeconds -gt 0) { $CrossfadeSecondsText.Text = [string]$settings.CrossfadeSeconds }
         if ($null -ne $settings.BlurAmount) { $BlurSlider.Value = [double]$settings.BlurAmount }
         if ($null -ne $settings.BackgroundBrightness) { $BrightnessSlider.Value = [double]$settings.BackgroundBrightness }
         if ($null -ne $settings.Quality) { Set-ComboText $QualityCombo ([string]$settings.Quality) }
@@ -1896,10 +1933,16 @@ function Get-RecommendedParallelSegments {
 
     $logicalCores = [Environment]::ProcessorCount
     if ($logicalCores -lt 1) { $logicalCores = 1 }
-    # A lane is mostly one saturated core running zoompan, which cannot be
-    # threaded, plus part of a second for the threaded scale, blur and encode
-    # around it. Budgeting four cores each was leaving most of a modern machine
-    # idle for the entire render.
+    # A lane no longer costs one saturated core. zoompan could not be threaded,
+    # so lanes were the only way to use a machine; the sub-pixel warp that
+    # replaced it threads across cores by itself, which means the lanes now
+    # compete for the same cores rather than filling idle ones.
+    #
+    # Measured on a 30-second segment of six photographs, eight logical cores:
+    # 3 lanes 2.13x realtime, 4 lanes 2.19x, 6 lanes 2.13x, 8 lanes 2.30x,
+    # 10 lanes 2.17x. It is a plateau, not a peak - anything from three lanes
+    # up lands within eight percent - so this picks the middle of it and does
+    # not chase the last few percent.
     $byCpu = [int][Math]::Floor($logicalCores / 2.0)
 
     # Assume a modest machine when the memory query is unavailable.
@@ -1910,23 +1953,24 @@ function Get-RecommendedParallelSegments {
     }
     catch {}
     # Measured rather than estimated: one lane rendering a 30 second segment
-    # peaked at just over 1.5 GB, and stayed there whether it was given two
-    # filter threads or six. 1.6 covers that.
+    # peaked at just over 1.5 GB when the renderer built every frame on a
+    # 3840x2160 canvas. That canvas is gone - the motion filter now warps
+    # straight onto the delivery frame - and peak working set fell with it,
+    # from 730 MB to 191 MB on the same measurement. 0.8 covers the new figure
+    # with the same margin the old number had.
     #
     # The five gigabytes held back are for Windows, this tool, and whatever the
     # person is doing while they wait. Reserving less looked affordable on a
     # machine with nothing else running and would have put an eight gigabyte
     # laptop into swap, which costs far more than the extra lane wins.
-    $byMemory = [int][Math]::Floor(($totalGb - 5.0) / 1.6)
+    $byMemory = [int][Math]::Floor(($totalGb - 5.0) / 0.8)
 
     $lanes = [Math]::Min($byCpu, $byMemory)
     if ($lanes -lt 1) { $lanes = 1 }
-    # Six was re-measured on a sixteen-core machine after shutter blur was
-    # removed. Eight lanes had looked about seven percent faster while every
-    # lane was still generating frames at double rate; once that work was gone,
-    # eight lost to six on both repeats. Past six the lanes contend for the
-    # same decode and scaling capacity instead of adding any.
-    if ($lanes -gt 6) { $lanes = 6 }
+    # Eight measured best on the sweep above, and it is where the plateau is
+    # widest. Past that the lanes contend for the same cores instead of adding
+    # any: ten lanes came in below eight.
+    if ($lanes -gt 8) { $lanes = 8 }
 
     # Step down to a lane count the encoder will actually grant. Discovering
     # this here costs a few seconds once; discovering it mid-render costs a
@@ -2032,6 +2076,21 @@ function Select-AvailableFilterBackend {
     # is that the tool started reaching it. It stayed unreachable for a
     # different reason than anyone thought, and one delivered 21-minute video
     # is what it cost to find out.
+    #
+    # Re-tested since, because part of the original diagnosis was wrong. The
+    # graph did carry a real bug: the loop filter hands out copies of one
+    # uploaded frame, every copy keeps that frame's timestamp, and the crop was
+    # driven by time, so the motion never advanced. That is fixed, and the fixed
+    # graph is the better renderer on paper - 0.3 percent frame-to-frame motion
+    # variance against the processor's 0.9, sharper, and faster.
+    #
+    # It still does not reproduce itself. Rendering one 30-second segment five
+    # times and comparing the decoded frames gave four different videos, each
+    # 896 frames instead of 900. Frames are being dropped, and only while an
+    # encoder is consuming the output: hashing the frames straight out of the
+    # filter graph, with no encoder behind it, the same five runs matched
+    # exactly. It is a race against back-pressure, not a bad crop, which is why
+    # it hides in every cheap test and appears in real renders.
     #
     # It is also no longer worth the risk. That graph earned its place when
     # every frame was generated twice for shutter blur; with that gone it
@@ -2304,7 +2363,9 @@ function Update-WorkflowState {
     else { $sourceSummary = 'Nothing chosen yet' }
     Set-StepComplete -Name 'Media' -Complete ($hasImages -and $hasAudio) -Summary $sourceSummary
 
-    Set-StepComplete -Name 'Motion' -Complete $true -Summary "$($MinimumDurationText.Text)-$($MaximumDurationText.Text)s holds, $($ZoomText.Text)% zoom"
+    $motionSummary = "$($MinimumDurationText.Text)-$($MaximumDurationText.Text)s holds, $($ZoomText.Text)% zoom"
+    if ([bool]$CrossfadeCheckBox.IsChecked) { $motionSummary += ", $($CrossfadeSecondsText.Text)s dissolve" }
+    Set-StepComplete -Name 'Motion' -Complete $true -Summary $motionSummary
 
     $captionMode = Get-ComboText $CaptionModeCombo
     $captionsDone = $true
@@ -2525,12 +2586,41 @@ function Get-PlanSignature {
     ) -join '||'
 }
 
+function Get-OverscanScale {
+    # Fast never enlarges more than the zoom does; Best holds more detail than
+    # the renderer this replaced. The middle is where the crop at maximum zoom
+    # is exactly one delivery frame.
+    #
+    #   setting    detail   motion variance   speed    40 x 10min a day
+    #   Fast        0.789        0.6%         2.34x         2.8 h
+    #   Balanced    0.799        1.0%         2.04x         3.3 h
+    #   Best        0.832        2.6%         1.12x         6.0 h
+    #   (the old jittery renderer: 0.828, 16.1%, 3.07x, 2.2 h)
+    param([psobject]$Settings)
+    if ($null -eq $Settings.PSObject.Properties['MotionQuality']) { return 1.1 }
+    switch ([string]$Settings.MotionQuality) {
+        'Fast' { return 1.0 }
+        'Best' { return 1.5 }
+        default { return 1.1 }
+    }
+}
+
+function Get-CrossfadeSeconds {
+    param([psobject]$Settings)
+    if ($null -eq $Settings.PSObject.Properties['Crossfade'] -or -not [bool]$Settings.Crossfade) { return 0.0 }
+    if ($null -eq $Settings.PSObject.Properties['CrossfadeSeconds']) { return 0.5 }
+    return [double]$Settings.CrossfadeSeconds
+}
+
 function Get-CurrentPreviewFingerprint {
     param([psobject]$Settings)
     $watermark = Get-Item -LiteralPath $WatermarkText.Text
     return @(
         $script:PlanSignature,
         $Settings.ZoomMaximum,
+        $Settings.MotionQuality,
+        $Settings.Crossfade,
+        $Settings.CrossfadeSeconds,
         $Settings.BlurAmount,
         $Settings.BackgroundBrightness,
         $Settings.Quality,
@@ -2609,7 +2699,7 @@ function Ensure-TimelinePlan {
             -AudioDurationSeconds $Duration `
             -MinimumDurationSeconds $Settings.MinimumDuration `
             -MaximumDurationSeconds $Settings.MaximumDuration `
-            -Fps 24
+            -Fps $script:DeliveryFps
     }
     $script:PlanSignature = $signature
     Update-StoryboardUI
@@ -3807,7 +3897,7 @@ function Show-BulkQueueBuilder {
             if ([string]::IsNullOrWhiteSpace($outputDirectory) -or -not (Test-Path -LiteralPath $outputDirectory -PathType Container)) { throw "Video $($index + 1): the output folder does not exist." }
             $images = @(Get-ValidatedImages $imageFolder)
             $duration = Get-MediaDurationSeconds -FfprobePath $script:FfprobePath -MediaPath $audio
-            $timeline = New-TimelinePlan -ImagePaths $images -AudioDurationSeconds $duration -MinimumDurationSeconds $settings.MinimumDuration -MaximumDurationSeconds $settings.MaximumDuration -Fps 24
+            $timeline = New-TimelinePlan -ImagePaths $images -AudioDurationSeconds $duration -MinimumDurationSeconds $settings.MinimumDuration -MaximumDurationSeconds $settings.MaximumDuration -Fps $script:DeliveryFps
             $project = [ordered]@{ SchemaVersion=1; ImageFolder=$imageFolder; AudioPath=$audio; WatermarkPath=$watermark; OutputPath=$output; Settings=$settings; PlanSignature=(Get-PlanSignature -Images $images -Duration $duration -Settings $settings -AudioPath $audio); Timeline=$timeline }
             $projectPath = Join-Path $queueDirectory ('video-{0:D3}.svp.json' -f ($index + 1))
             [IO.File]::WriteAllText($projectPath, ($project | ConvertTo-Json -Depth 12), [Text.UTF8Encoding]::new($false)); $projectPaths.Add($projectPath)
@@ -4111,7 +4201,7 @@ function Start-VideoRender {
         }
         else {
             $destinationPath = $script:PreviewPath
-            $renderFrames = [Math]::Min(60 * 24, [int]$script:CurrentPlan.TotalFrames)
+            $renderFrames = [Math]::Min(60 * [int]$script:CurrentPlan.Fps, [int]$script:CurrentPlan.TotalFrames)
             Stop-PreviewPlayback
             $PreviewMedia.Source = $null
         }
@@ -4134,6 +4224,8 @@ function Start-VideoRender {
                 -SubtitlePath '' `
                 -CaptionPreset $settings.CaptionPreset `
                 -OpenClScreenKernelPath $script:ScreenKernelPath `
+                -CrossfadeSeconds (Get-CrossfadeSeconds $settings) `
+                -OverscanScale (Get-OverscanScale $settings) `
                 -Width 1920 -Height 1080
         }
         elseif ($filterBackend -eq 'vulkan') {
@@ -4146,6 +4238,8 @@ function Start-VideoRender {
                 -SubtitlePath '' `
                 -CaptionPreset $settings.CaptionPreset `
                 -HardwareOutputFrames ($encoder -eq 'h264_vulkan') `
+                -CrossfadeSeconds (Get-CrossfadeSeconds $settings) `
+                -OverscanScale (Get-OverscanScale $settings) `
                 -Width 1920 -Height 1080
         }
         else {
@@ -4157,6 +4251,8 @@ function Start-VideoRender {
                 -BackgroundBrightnessPercent $settings.BackgroundBrightness `
                 -SubtitlePath '' `
                 -CaptionPreset $settings.CaptionPreset `
+                -CrossfadeSeconds (Get-CrossfadeSeconds $settings) `
+                -OverscanScale (Get-OverscanScale $settings) `
                 -Width 1920 -Height 1080
         }
 
@@ -4204,7 +4300,7 @@ function Start-VideoRender {
         foreach ($value in @('-filter_complex_script', $filterPath, '-map', '[vout]', '-map', '0:a:0')) {
             $arguments.Add($value)
         }
-        foreach ($value in (Get-EncodingArguments -Encoder $encoder -Quality $settings.Quality)) {
+        foreach ($value in (Get-EncodingArguments -Encoder $encoder -Quality $settings.Quality -Fps ([int]$script:CurrentPlan.Fps))) {
             $arguments.Add($value)
         }
         $audioBitrate = if ($settings.Quality -eq 'YouTube') { '384k' } else { '160k' }
@@ -4788,6 +4884,10 @@ $OutputText.Add_TextChanged({ Update-WorkflowState })
 $MinimumDurationText.Add_TextChanged({ Invalidate-Preview $true; Update-WorkflowState })
 $MaximumDurationText.Add_TextChanged({ Invalidate-Preview $true; Update-WorkflowState })
 $ZoomText.Add_TextChanged({ Invalidate-Preview $false; Update-WorkflowState })
+$CrossfadeCheckBox.Add_Checked({ $CrossfadeDurationRow.IsEnabled = $true; Invalidate-Preview $false; Update-WorkflowState })
+$CrossfadeCheckBox.Add_Unchecked({ $CrossfadeDurationRow.IsEnabled = $false; Invalidate-Preview $false; Update-WorkflowState })
+$CrossfadeSecondsText.Add_TextChanged({ Invalidate-Preview $false; Update-WorkflowState })
+$MotionQualityCombo.Add_SelectionChanged({ Invalidate-Preview $false; Update-WorkflowState })
 $BlurSlider.Add_ValueChanged({ Update-SettingLabels; Invalidate-Preview $false; Update-WorkflowState })
 $BrightnessSlider.Add_ValueChanged({ Update-SettingLabels; Invalidate-Preview $false; Update-WorkflowState })
 $QualityCombo.Add_SelectionChanged({ Update-Estimate; Invalidate-Preview $false; Update-WorkflowState })

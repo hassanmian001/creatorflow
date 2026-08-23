@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
     [string]$JobPath
@@ -6,6 +6,23 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+function Get-JobOverscanScale {
+    $settings = $script:Job.Settings
+    if ($null -eq $settings.PSObject.Properties['MotionQuality']) { return 1.1 }
+    switch ([string]$settings.MotionQuality) {
+        'Fast'    { return 1.0 }
+        'Best'    { return 1.5 }
+        default   { return 1.1 }
+    }
+}
+
+function Get-JobCrossfadeSeconds {
+    $settings = $script:Job.Settings
+    if ($null -eq $settings.PSObject.Properties['Crossfade'] -or -not [bool]$settings.Crossfade) { return 0.0 }
+    if ($null -eq $settings.PSObject.Properties['CrossfadeSeconds']) { return 0.5 }
+    return [double]$settings.CrossfadeSeconds
+}
 
 function Write-WorkerProgress {
     param([double]$Percent, [string]$Message)
@@ -428,13 +445,13 @@ try {
             $segmentSrt = New-SegmentSubtitle -SourcePath ([string]$script:Job.CaptionPath) -StartSeconds ($startFrame / [double]$fps) -DurationSeconds $durationSeconds -DestinationPath (Join-Path $resumeDirectory ('captions-{0:D4}.srt' -f $segmentIndex)) -MaxWordsPerLine $captionWordsPerLine
         }
         if ($useOpenClEffects) {
-            $definition = New-FilterGraph -Timeline $slice -RenderFrames $frameCount -ZoomMaximumPercent ([double]$script:Job.Settings.ZoomMaximum) -BlurAmount ([double]$script:Job.Settings.BlurAmount) -BackgroundBrightnessPercent ([double]$script:Job.Settings.BackgroundBrightness) -SubtitlePath $segmentSrt -CaptionPreset $captionPreset -CaptionStyle $script:Job.Settings -OpenClScreenKernelPath $screenKernelPath -Width 1920 -Height 1080
+            $definition = New-FilterGraph -Timeline $slice -RenderFrames $frameCount -ZoomMaximumPercent ([double]$script:Job.Settings.ZoomMaximum) -BlurAmount ([double]$script:Job.Settings.BlurAmount) -BackgroundBrightnessPercent ([double]$script:Job.Settings.BackgroundBrightness) -SubtitlePath $segmentSrt -CaptionPreset $captionPreset -CaptionStyle $script:Job.Settings -OpenClScreenKernelPath $screenKernelPath -CrossfadeSeconds (Get-JobCrossfadeSeconds) -OverscanScale (Get-JobOverscanScale) -Width 1920 -Height 1080
         }
         elseif ($filterBackend -eq 'vulkan') {
-            $definition = New-VulkanFilterGraph -Timeline $slice -RenderFrames $frameCount -ZoomMaximumPercent ([double]$script:Job.Settings.ZoomMaximum) -BlurAmount ([double]$script:Job.Settings.BlurAmount) -BackgroundBrightnessPercent ([double]$script:Job.Settings.BackgroundBrightness) -SubtitlePath $segmentSrt -CaptionPreset $captionPreset -CaptionStyle $script:Job.Settings -HardwareOutputFrames ([string]$script:Job.Encoder -eq 'h264_vulkan') -Width 1920 -Height 1080
+            $definition = New-VulkanFilterGraph -Timeline $slice -RenderFrames $frameCount -ZoomMaximumPercent ([double]$script:Job.Settings.ZoomMaximum) -BlurAmount ([double]$script:Job.Settings.BlurAmount) -BackgroundBrightnessPercent ([double]$script:Job.Settings.BackgroundBrightness) -SubtitlePath $segmentSrt -CaptionPreset $captionPreset -CaptionStyle $script:Job.Settings -HardwareOutputFrames ([string]$script:Job.Encoder -eq 'h264_vulkan') -CrossfadeSeconds (Get-JobCrossfadeSeconds) -OverscanScale (Get-JobOverscanScale) -Width 1920 -Height 1080
         }
         else {
-            $definition = New-FilterGraph -Timeline $slice -RenderFrames $frameCount -ZoomMaximumPercent ([double]$script:Job.Settings.ZoomMaximum) -BlurAmount ([double]$script:Job.Settings.BlurAmount) -BackgroundBrightnessPercent ([double]$script:Job.Settings.BackgroundBrightness) -SubtitlePath $segmentSrt -CaptionPreset $captionPreset -CaptionStyle $script:Job.Settings -Width 1920 -Height 1080
+            $definition = New-FilterGraph -Timeline $slice -RenderFrames $frameCount -ZoomMaximumPercent ([double]$script:Job.Settings.ZoomMaximum) -BlurAmount ([double]$script:Job.Settings.BlurAmount) -BackgroundBrightnessPercent ([double]$script:Job.Settings.BackgroundBrightness) -SubtitlePath $segmentSrt -CaptionPreset $captionPreset -CaptionStyle $script:Job.Settings -CrossfadeSeconds (Get-JobCrossfadeSeconds) -OverscanScale (Get-JobOverscanScale) -Width 1920 -Height 1080
         }
         $filterPath = Join-Path $resumeDirectory ('filter-{0:D4}.txt' -f $segmentIndex)
         [IO.File]::WriteAllText($filterPath, $definition.FilterText, [Text.UTF8Encoding]::new($false))
@@ -456,7 +473,7 @@ try {
         $arguments.Add('-i'); $arguments.Add([string]$script:Job.WatermarkPath)
         foreach ($imagePath in $definition.ImageInputs) { $arguments.Add('-i'); $arguments.Add([string]$imagePath) }
         foreach ($value in @('-filter_complex_script',$filterPath,'-map','[vout]')) { $arguments.Add($value) }
-        foreach ($value in (Get-EncodingArguments -Encoder ([string]$script:Job.Encoder) -Quality ([string]$script:Job.Settings.Quality))) { $arguments.Add($value) }
+        foreach ($value in (Get-EncodingArguments -Encoder ([string]$script:Job.Encoder) -Quality ([string]$script:Job.Settings.Quality) -Fps $fps)) { $arguments.Add($value) }
         # -r is what makes the segment record its true length. Without it the
         # MP4 duration is written as the last frame's timestamp rather than that
         # timestamp plus one frame, so the segment reads one frame short. The
