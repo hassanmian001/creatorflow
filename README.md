@@ -1,6 +1,6 @@
 # Slideshow Video Tool
 
-A portable Windows 11 tool for turning a folder of images and an M4A voiceover into a 1920x1080, 30 FPS YouTube video.
+A portable Windows 11 tool for turning a folder of images and an M4A voiceover into a 1920x1080, 24 FPS YouTube video.
 
 ## What it does
 
@@ -37,6 +37,9 @@ A portable Windows 11 tool for turning a folder of images and an M4A voiceover i
   | Balanced | 0.799 | 1.0% | 2.04x | 3.3 h |
   | Best | 0.832 | 2.6% | 1.12x | 6.0 h |
   | *(the old renderer)* | *0.828* | *16.1%* | *3.07x* | *2.2 h* |
+
+  Those speeds were measured at 30 FPS; at the 24 FPS this delivers they are
+  about a fifth quicker again.
 
   Detail is structural similarity to the same frame built at four times the
   delivery resolution. Balanced is the default: the crop at maximum zoom is

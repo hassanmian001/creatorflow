@@ -21,7 +21,7 @@ foreach ($duration in $durations) {
             -AudioDurationSeconds $duration `
             -MinimumDurationSeconds 5.0 `
             -MaximumDurationSeconds 7.0 `
-            -Fps 30 `
+            -Fps 24 `
             -Seed $seed
 
         $frameSum = ($plan.Items | Measure-Object Frames -Sum).Sum
@@ -52,7 +52,7 @@ foreach ($duration in $durations) {
         Assert-True (-not ($graph.FilterText -match 'zoompan=')) 'CPU zoom does not use whole-pixel cropping'
         Assert-True ($graph.FilterText -match 'sense=source:eval=frame') 'CPU crop is re-evaluated every frame in source coordinates'
         Assert-True ($graph.FilterText -match 'interpolation=cubic') 'CPU crop samples between pixels rather than snapping to them'
-        Assert-True ($graph.FilterText -match 'fps=30') 'CPU zoom is generated once per delivered frame'
+        Assert-True ($graph.FilterText -match 'fps=24') 'CPU zoom is generated once per delivered frame'
         Assert-True (-not ($graph.FilterText -match 'tmix=')) 'CPU zoom carries no temporal blend'
         Assert-True ($graph.FilterText -match 'gblur=') 'Blurred background filter'
         Assert-True (-not $graph.FilterText.TrimEnd().EndsWith(';')) 'Filter graph has no empty trailing chain'
@@ -88,11 +88,11 @@ foreach ($duration in $durations) {
         Assert-True (-not ($gpuGraph.FilterText -match "crop_x='[^']*2\*min")) 'Vulkan pan offset does not vary with progress'
         Assert-True (-not ($gpuGraph.FilterText -match "crop_y='[^']*2\*min")) 'Vulkan vertical pan offset does not vary with progress'
         Assert-True ($gpuGraph.FilterText -match 'peak_detect=0') 'Vulkan path skips unnecessary HDR analysis'
-        Assert-True ($gpuGraph.FilterText -match 'fps=30,format=nv12,hwupload,loop=') 'Vulkan zoom is generated once per delivered frame, from a single upload'
+        Assert-True ($gpuGraph.FilterText -match 'fps=24,format=nv12,hwupload,loop=') 'Vulkan zoom is generated once per delivered frame, from a single upload'
         # The loop filter hands out copies of one uploaded frame, and every copy
         # carries that frame's timestamp. Left alone, a time-driven crop reads
         # the same instant for the whole clip and the motion never starts.
-        Assert-True ($gpuGraph.FilterText -match 'setpts=N/\(30\*TB\),libplacebo=') 'Vulkan clip rebuilds timestamps from the frame counter before the crop'
+        Assert-True ($gpuGraph.FilterText -match 'setpts=N/\(24\*TB\),libplacebo=') 'Vulkan clip rebuilds timestamps from the frame counter before the crop'
         Assert-True (-not ($gpuGraph.FilterText -match "crop_w='[^']*t\*")) 'Vulkan crop is driven by frame number, not by a timestamp the loop never advances'
         # A still image looped after the upload is sent to the card once. Looped
         # before it, the same canvas crossed the bus 48 times a second.
@@ -128,6 +128,32 @@ foreach ($duration in $durations) {
         $slice = New-TimelineSlice -Timeline $plan -StartFrame 24 -FrameCount $sliceFrames
         Assert-True ($slice.TotalFrames -eq $sliceFrames) 'Timeline slice has exact requested frames'
         Assert-True ((($slice.Items | Measure-Object Frames -Sum).Sum) -eq $sliceFrames) 'Timeline slice item sum'
+    }
+}
+
+# A voiceover is whatever length it is, and every image lasts a whole number of
+# tenths of a second. Where a tenth divides evenly into frames - 3 frames at 30
+# FPS - every buildable total is a multiple of 3, and only about a third of
+# voiceovers land on one. The other two thirds used to fail outright, telling
+# the person to nudge a duration range that could not have helped.
+$timingRandom = [System.Random]::new(7)
+$timingDurations = 1..40 | ForEach-Object { 120.0 + $timingRandom.NextDouble() * 1080.0 }
+foreach ($timingFps in 24, 25, 30, 60) {
+    foreach ($timingDuration in $timingDurations) {
+        $timingPlan = New-TimelinePlan `
+            -ImagePaths $images `
+            -AudioDurationSeconds $timingDuration `
+            -MinimumDurationSeconds 5.0 `
+            -MaximumDurationSeconds 7.0 `
+            -Fps $timingFps `
+            -Seed 5
+        $timingSum = ($timingPlan.Items | Measure-Object Frames -Sum).Sum
+        Assert-True ($timingSum -eq $timingPlan.TotalFrames) "Timeline totals agree at $timingFps FPS"
+        # Rounding up rather than down, so the picture never runs out before the
+        # voiceover does. The mux ends on the shorter stream and trims the rest.
+        $timingOvershoot = ($timingPlan.TotalFrames / [double]$timingFps) - $timingDuration
+        Assert-True ($timingOvershoot -ge 0) "Video does not end before the voiceover at $timingFps FPS"
+        Assert-True ($timingOvershoot -lt 0.2) "Video ends within a fraction of a second of the voiceover at $timingFps FPS"
     }
 }
 

@@ -207,7 +207,7 @@ function New-TimelinePlan {
 
         [double]$MinimumDurationSeconds = 5.0,
         [double]$MaximumDurationSeconds = 7.0,
-        [int]$Fps = 30,
+        [int]$Fps = 24,
         [Nullable[int]]$Seed
     )
 
@@ -230,6 +230,33 @@ function New-TimelinePlan {
     $allowed = @(Get-AllowedDurationOptions -MinimumTenths $minimumTenths -MaximumTenths $maximumTenths -Fps $Fps)
     if ($allowed.Count -eq 0) {
         throw "No valid image durations were generated."
+    }
+
+    # Every image lasts a whole number of tenths of a second, so every possible
+    # total is a multiple of whatever those lengths have in common. At 24 FPS a
+    # tenth is 2.4 frames, which rounds to lengths sharing no common factor, and
+    # any total at all can be built. At 30 FPS a tenth is exactly 3 frames, so
+    # every total is a multiple of 3 - and a voiceover only lands on a multiple
+    # of 3 frames about a third of the time. The other two thirds were
+    # impossible to build and reported as a timing error the person was asked
+    # to solve by nudging the duration range, which could not have helped.
+    #
+    # So the target rounds up to the next total that can actually be built. The
+    # video then runs at most a frame or two past the voiceover - 0.067 seconds
+    # at 30 FPS - and the mux, which already ends on the shorter stream, trims
+    # it back. Rounding up rather than down keeps the picture from ending
+    # before the audio does.
+    $stride = 0
+    foreach ($option in $allowed) {
+        $value = [int]$option.Frames
+        while ($value -ne 0) {
+            $remainder = $stride % $value
+            $stride = $value
+            $value = $remainder
+        }
+    }
+    if ($stride -gt 1 -and ($targetFrames % $stride) -ne 0) {
+        $targetFrames += $stride - ($targetFrames % $stride)
     }
 
     $minimumFrames = [int]$allowed[0].Frames
@@ -1081,7 +1108,7 @@ function Get-EncodingArguments {
         [ValidateSet('Compact', 'Balanced', 'High', 'YouTube')]
         [string]$Quality,
 
-        [int]$Fps = 30
+        [int]$Fps = 24
     )
 
     $qualitySettings = @{

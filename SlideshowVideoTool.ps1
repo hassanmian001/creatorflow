@@ -575,7 +575,7 @@ $xaml = @'
                     <Border Background="{StaticResource SunkenBrush}" BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="5" Padding="11,9">
                         <StackPanel>
                             <TextBlock Text="OUTPUT" Foreground="{StaticResource MutedBrush}" FontSize="10" FontWeight="Bold"/>
-                            <TextBlock Text="1920x1080  30 fps  H.264" Foreground="{StaticResource DimBrush}" FontFamily="Consolas" FontSize="11.5" Margin="0,4,0,0"/>
+                            <TextBlock Text="1920x1080  24 fps  H.264" Foreground="{StaticResource DimBrush}" FontFamily="Consolas" FontSize="11.5" Margin="0,4,0,0"/>
                         </StackPanel>
                     </Border>
                 </StackPanel>
@@ -615,7 +615,7 @@ $xaml = @'
                     </Canvas>
 
                     <Border VerticalAlignment="Top" HorizontalAlignment="Right" Background="#C60C0C0E" BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="4" Padding="8,4" Margin="11">
-                        <TextBlock Text="1920x1080  |  30 fps" Foreground="{StaticResource DimBrush}" FontFamily="Consolas" FontSize="10.5"/>
+                        <TextBlock Text="1920x1080  |  24 fps" Foreground="{StaticResource DimBrush}" FontFamily="Consolas" FontSize="10.5"/>
                     </Border>
 
                     <Border VerticalAlignment="Bottom" Padding="12,9">
@@ -876,7 +876,7 @@ $xaml = @'
                                 </ComboBox></Grid>
                             <Grid Margin="0,9"><Grid.ColumnDefinitions><ColumnDefinition Width="104"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                                 <TextBlock Text="Format" Style="{StaticResource RowLabel}"/>
-                                <TextBlock Grid.Column="1" Text="1080p  H.264  30 fps" Foreground="{StaticResource DimBrush}" FontFamily="Consolas" FontSize="11.5"/></Grid>
+                                <TextBlock Grid.Column="1" Text="1080p  H.264  24 fps" Foreground="{StaticResource DimBrush}" FontFamily="Consolas" FontSize="11.5"/></Grid>
                             <Grid Margin="0,3"><Grid.ColumnDefinitions><ColumnDefinition Width="104"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                                 <TextBlock Text="Estimated size" Style="{StaticResource RowLabel}"/>
                                 <TextBlock x:Name="EstimateText" Grid.Column="1" Text="Scan voiceover first" Foreground="{StaticResource AccentBrush}" FontSize="12"/></Grid>
@@ -1113,14 +1113,21 @@ $script:IsLoading = $true
 $script:FfmpegPath = $null
 $script:FfprobePath = $null
 $script:SelectedEncoder = $null
-# 30, not 24. A 24 FPS video played on a 60 Hz screen - which is nearly every
-# screen this lands on - cannot be shown evenly: 3:2 pulldown holds one frame
-# for 50 ms and the next for 33 ms. Film hides that behind the motion blur of a
-# 1/48 second shutter, but this motion is synthetic and perfectly sharp, so
-# there is nothing to hide it, and a slow zoom is exactly the case where the
-# uneven cadence is most visible. 30 divides into 60 evenly and the judder goes
-# away for 25 percent more frames.
-$script:DeliveryFps = 30
+# 24 rather than 30, chosen for throughput at this tool's real workload of
+# thirty to fifty videos a day: it is a fifth fewer frames to render, worth
+# roughly forty minutes a day.
+#
+# It is not free. A 24 FPS video on a 60 Hz screen cannot be shown evenly -
+# 3:2 pulldown holds one frame for 50 ms and the next for 33 ms - and film
+# hides that behind the motion blur of a 1/48 second shutter, which synthetic
+# motion does not have. A slow zoom is where that shows most. 30 divides into
+# 60 evenly and has none of it.
+#
+# What makes 24 defensible here is that 120 Hz displays, which is most recent
+# phones, divide evenly by 24 as well and show it perfectly. The judder is a
+# 60 Hz problem, and it is far milder than the whole-pixel stepping this
+# renderer used to have, which was a different fault entirely and is fixed.
+$script:DeliveryFps = 24
 $script:RecommendedParallelSegments = $null
 $script:VulkanDeviceIndex = $null
 $script:FilterBackend = $null
