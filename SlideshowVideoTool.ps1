@@ -3829,8 +3829,8 @@ function Show-BulkQueueBuilder {
   </Window.Resources>
   <Grid Margin="18"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
     <TextBlock Text="Add as many videos as you need, each with its own watermark, then render them one at a time." FontSize="17" FontWeight="SemiBold"/>
-    <Grid Grid.Row="1" Margin="0,14,0,12"><Grid.ColumnDefinitions><ColumnDefinition Width="100"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-      <TextBlock Text="Watermark for new videos" VerticalAlignment="Center" Foreground="#A3A39E" ToolTip="Fills in the watermark of each video you add next. Change any video's own watermark below."/><TextBox x:Name="WatermarkText" Grid.Column="1" Margin="8,0"/><Button x:Name="BrowseWatermarkButton" Grid.Column="2" Content="Browse" Padding="12,6"/>
+    <Grid Grid.Row="1" Margin="0,14,0,12"><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+      <TextBlock Text="Watermark to start each new video with" VerticalAlignment="Center" Foreground="#A3A39E" ToolTip="This is only a starting value. Adding a video copies it into that video's own Watermark box, where you can change it. What renders is always the video's own watermark."/><TextBox x:Name="WatermarkText" Grid.Column="1" Margin="8,0"/><Button x:Name="BrowseWatermarkButton" Grid.Column="2" Content="Browse" Padding="12,6"/>
     </Grid>
     <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto"><StackPanel x:Name="RowsPanel"/></ScrollViewer>
     <Grid Grid.Row="3" Margin="0,14,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
