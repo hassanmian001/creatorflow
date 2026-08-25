@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$Version,
     [string]$Notes = '',
@@ -172,6 +172,29 @@ to a release tagged v$parsed by hand.
     }
     $tag = "v$parsed"
 
+    # Look before creating. GitHub answers a duplicate release with a bare 422,
+    # and a message listing three possible causes reads like a failure even
+    # when the release published perfectly a moment earlier - which is exactly
+    # what happens when this script is run twice. Say which it is.
+    $existingRelease = $null
+    try {
+        $existingRelease = Invoke-RestMethod -Method Get -Uri "https://api.github.com/repos/$owner/$repo/releases/tags/$tag" -Headers $headers
+    }
+    catch { $existingRelease = $null }
+    if ($null -ne $existingRelease) {
+        $assetNames = @($existingRelease.assets | ForEach-Object { $_.name })
+        $needed = @('CreatorFlow-app.zip', 'update.json')
+        $missing = @($needed | Where-Object { $assetNames -notcontains $_ })
+        if ($missing.Count -eq 0) {
+            Write-Host ""
+            Write-Host "  $tag is already published, and complete." -ForegroundColor Green
+            Write-Host "  Nothing to do. Installed copies will offer it on their next start."
+            Write-Host "  $($existingRelease.html_url)"
+            return
+        }
+        throw "Release $tag already exists but is missing $($missing -join ' and '). Delete the release and its tag on GitHub, then publish $parsed again:`r`n  $($existingRelease.html_url)"
+    }
+
     Write-Host "  creating release $tag..."
     $body = @{ tag_name = $tag; name = $tag; body = $Notes; draft = $false; prerelease = $false } | ConvertTo-Json
     try {
@@ -179,7 +202,7 @@ to a release tagged v$parsed by hand.
             -Headers $headers -Body $body -ContentType 'application/json'
     }
     catch {
-        throw "GitHub refused to create the release. $($_.Exception.Message)`r`n`r`nCheck that the repository $owner/$repo exists, that the token can write to it, and that tag $tag is not already used."
+        throw "GitHub refused to create the release. $($_.Exception.Message)`r`n`r`nCheck that the repository $owner/$repo exists and that the token can write to it."
     }
 
     $uploadRoot = ($release.upload_url -replace '\{.*$', '')
