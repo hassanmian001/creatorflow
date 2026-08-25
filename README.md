@@ -108,7 +108,20 @@ The first caption run downloads an offline multilingual speech model (about 465 
 
 After captions are generated, use **Edit Captions** to correct the SRT before rendering. The editor remains open beside the main player, so text and timestamp edits can be checked while seeking or playing. Caption changes never require regenerating the 60-second preview; a burned-caption final export applies the current style and SRT during rendering.
 
-For batch work, click **Batch Projects**. Add any number of videos, selecting an images folder, M4A voiceover, and MP4 output for each one. Choose the shared watermark, then click **Render All**; the tool builds the projects and renders them one at a time so the laptop is not overloaded. Motion and caption settings from the main window are applied to every queued video. The same window also retains **Render Saved Projects** for existing `.svp.json` projects.
+For batch work, click **Batch Projects**. Add any number of videos, selecting an
+images folder, M4A voiceover, **watermark** and MP4 output for each one, then click
+**Render All**; the tool builds the projects and renders them one at a time so the
+laptop is not overloaded.
+
+Each video carries its own watermark, so one batch can mix videos that do not share
+one. The box at the top of that window is a starting value only: it fills in the
+watermark of each video as you add it, which keeps a batch that does share one
+watermark to a single browse. Every video must end up with a watermark, and what
+renders is always the video's own.
+
+Motion and caption settings come from the main window and are applied to every
+queued video. The same window also retains **Render Saved Projects** for existing
+`.svp.json` projects.
 
 Use **Render History** from the left navigation to inspect jobs, open outputs, remove history entries, or resume a paused final/batch render. Jobs that were active when the application closed are marked Paused on the next launch.
 

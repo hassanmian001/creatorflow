@@ -3770,9 +3770,14 @@ function Show-RenderHistory {
 }
 
 function Show-BulkQueueBuilder {
-    # A queue item is deliberately kept small: one image folder, one voiceover,
-    # and one output.  The current Motion/Captions settings and watermark are
-    # shared by all queue items, so users can prepare many videos in one pass.
+    # A queue item carries its own image folder, voiceover, watermark and
+    # output, so one batch can mix videos that do not share a watermark. The
+    # Motion and Caption settings are still taken once from the main window.
+    #
+    # The box at the top is only a starting value: it fills the watermark of
+    # each new row as it is added, which keeps the common case - one watermark
+    # across the whole batch - to a single browse. What actually renders is
+    # always the row's own value, and every row must have one.
     $queueXaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Build render queue" Width="960" Height="700" MinWidth="760" MinHeight="520" WindowStartupLocation="CenterOwner"
@@ -3823,9 +3828,9 @@ function Show-BulkQueueBuilder {
     </Style>
   </Window.Resources>
   <Grid Margin="18"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-    <TextBlock Text="Add as many videos as you need, then render them one at a time." FontSize="17" FontWeight="SemiBold"/>
+    <TextBlock Text="Add as many videos as you need, each with its own watermark, then render them one at a time." FontSize="17" FontWeight="SemiBold"/>
     <Grid Grid.Row="1" Margin="0,14,0,12"><Grid.ColumnDefinitions><ColumnDefinition Width="100"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-      <TextBlock Text="Watermark" VerticalAlignment="Center" Foreground="#A3A39E"/><TextBox x:Name="WatermarkText" Grid.Column="1" Margin="8,0"/><Button x:Name="BrowseWatermarkButton" Grid.Column="2" Content="Browse" Padding="12,6"/>
+      <TextBlock Text="Watermark for new videos" VerticalAlignment="Center" Foreground="#A3A39E" ToolTip="Fills in the watermark of each video you add next. Change any video's own watermark below."/><TextBox x:Name="WatermarkText" Grid.Column="1" Margin="8,0"/><Button x:Name="BrowseWatermarkButton" Grid.Column="2" Content="Browse" Padding="12,6"/>
     </Grid>
     <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto"><StackPanel x:Name="RowsPanel"/></ScrollViewer>
     <Grid Grid.Row="3" Margin="0,14,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
@@ -3860,7 +3865,9 @@ function Show-BulkQueueBuilder {
         $remove = [Windows.Controls.Button]::new(); $remove.Content = 'Remove'; $remove.Padding = [Windows.Thickness]::new(10,4,10,4)
         [Windows.Controls.Grid]::SetColumn($remove, 1); $header.Children.Add($title); $header.Children.Add($remove); $panel.Children.Add($header)
         $imageBox = [Windows.Controls.TextBox]::new(); $audioBox = [Windows.Controls.TextBox]::new(); $outputBox = [Windows.Controls.TextBox]::new()
-        foreach ($definition in @(@('Images folder', $imageBox, 'Folder'), @('Voiceover (M4A)', $audioBox, 'Audio'), @('Output MP4', $outputBox, 'Output'))) {
+        $rowWatermarkBox = [Windows.Controls.TextBox]::new()
+        $rowWatermarkBox.Text = $watermarkBox.Text.Trim()
+        foreach ($definition in @(@('Images folder', $imageBox, 'Folder'), @('Voiceover (M4A)', $audioBox, 'Audio'), @('Watermark', $rowWatermarkBox, 'Watermark'), @('Output MP4', $outputBox, 'Output'))) {
             $grid = [Windows.Controls.Grid]::new(); $grid.Margin = [Windows.Thickness]::new(0,6,0,0)
             $labelColumn = [Windows.Controls.ColumnDefinition]::new(); $labelColumn.Width = [Windows.GridLength]::new(120); $grid.ColumnDefinitions.Add($labelColumn)
             $grid.ColumnDefinitions.Add([Windows.Controls.ColumnDefinition]::new())
@@ -3871,9 +3878,10 @@ function Show-BulkQueueBuilder {
             $grid.Children.Add($label); $grid.Children.Add($box); $grid.Children.Add($browse); $panel.Children.Add($grid)
             if ($definition[2] -eq 'Folder') { $browse.Add_Click(({ $picked = Select-Folder -Description 'Select images folder'; if ($picked) { $box.Text = $picked } }).GetNewClosure()) }
             elseif ($definition[2] -eq 'Audio') { $browse.Add_Click(({ $picked = Select-OpenFile -Title 'Select M4A voiceover' -Filter 'M4A audio (*.m4a)|*.m4a'; if ($picked) { $box.Text = $picked } }).GetNewClosure()) }
+            elseif ($definition[2] -eq 'Watermark') { $browse.Add_Click(({ $picked = Select-OpenFile -Title 'Select watermark video' -Filter 'Video files (*.mov;*.mp4)|*.mov;*.mp4'; if ($picked) { $box.Text = $picked } }).GetNewClosure()) }
             else { $browse.Add_Click(({ $picked = Select-SaveFile -Title 'Choose output MP4' -Filter 'MP4 video (*.mp4)|*.mp4' -DefaultExtension '.mp4'; if ($picked) { $box.Text = $picked } }).GetNewClosure()) }
         }
-        $row = [pscustomobject]@{ Border=$border; ImageBox=$imageBox; AudioBox=$audioBox; OutputBox=$outputBox }
+        $row = [pscustomobject]@{ Border=$border; ImageBox=$imageBox; AudioBox=$audioBox; OutputBox=$outputBox; WatermarkBox=$rowWatermarkBox }
         $remove.Add_Click(({ $rows.Remove($row); [void]$rowsPanel.Children.Remove($border) }).GetNewClosure())
         $rows.Add($row); $rowsPanel.Children.Add($border)
     }.GetNewClosure()
@@ -3889,14 +3897,20 @@ function Show-BulkQueueBuilder {
     try {
         if ($rows.Count -eq 0) { throw 'Add at least one video to the queue.' }
         $settings = Get-UiSettings
-        $watermark = $watermarkBox.Text.Trim()
-        if ([string]::IsNullOrWhiteSpace($watermark) -or -not (Test-Path -LiteralPath $watermark -PathType Leaf) -or @('.mov','.mp4') -notcontains [IO.Path]::GetExtension($watermark).ToLowerInvariant()) { throw 'Select a valid MOV or MP4 watermark for the queue.' }
-        if (-not (Test-VideoStream $watermark)) { throw 'FFprobe could not read the selected watermark video.' }
+        # Reading a watermark costs an FFprobe launch, and a batch of fifty
+        # videos sharing one watermark would otherwise pay for it fifty times.
+        $checkedWatermarks = @{}
         $queueDirectory = Join-Path (Join-Path $script:DataRoot 'queue-projects') ([guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Path $queueDirectory -Force | Out-Null
         $projectPaths = [Collections.Generic.List[string]]::new()
         for ($index = 0; $index -lt $rows.Count; $index++) {
             $row = $rows[$index]; $imageFolder = $row.ImageBox.Text.Trim(); $audio = $row.AudioBox.Text.Trim(); $output = $row.OutputBox.Text.Trim()
+            $watermark = $row.WatermarkBox.Text.Trim()
+            if ([string]::IsNullOrWhiteSpace($watermark) -or -not (Test-Path -LiteralPath $watermark -PathType Leaf) -or @('.mov','.mp4') -notcontains [IO.Path]::GetExtension($watermark).ToLowerInvariant()) { throw "Video $($index + 1): select a valid MOV or MP4 watermark." }
+            if (-not $checkedWatermarks.ContainsKey($watermark)) {
+                if (-not (Test-VideoStream $watermark)) { throw "Video $($index + 1): FFprobe could not read the selected watermark video." }
+                $checkedWatermarks[$watermark] = $true
+            }
             if ([string]::IsNullOrWhiteSpace($imageFolder) -or -not (Test-Path -LiteralPath $imageFolder -PathType Container)) { throw "Video $($index + 1): select a valid images folder." }
             if ([string]::IsNullOrWhiteSpace($audio) -or -not (Test-Path -LiteralPath $audio -PathType Leaf) -or [IO.Path]::GetExtension($audio).ToLowerInvariant() -ne '.m4a') { throw "Video $($index + 1): select a valid M4A voiceover." }
             if ([string]::IsNullOrWhiteSpace($output) -or [IO.Path]::GetExtension($output).ToLowerInvariant() -ne '.mp4') { throw "Video $($index + 1): choose an output MP4 file." }
@@ -3957,15 +3971,26 @@ function Start-BatchRender {
 
             $captionMode = 'Off'
             if ($project.Settings.PSObject.Properties['CaptionMode']) { $captionMode = [string]$project.Settings.CaptionMode }
-            $settings = [pscustomobject]@{
-                MinimumDuration = [double]$project.Settings.MinimumDuration
-                MaximumDuration = [double]$project.Settings.MaximumDuration
-                ZoomMaximum = [double]$project.Settings.ZoomMaximum
-                BlurAmount = [double]$project.Settings.BlurAmount
-                BackgroundBrightness = [double]$project.Settings.BackgroundBrightness
-                Quality = [string]$project.Settings.Quality
-                CaptionMode = $captionMode
+            # Carry the project's own settings through whole. This used to copy
+            # seven fields by hand, which silently dropped everything else the
+            # project had saved - all the caption styling, the volume, and any
+            # setting added later. A hand-written list cannot help going stale:
+            # it is only correct until the next setting exists, and then it is
+            # wrong quietly, in batch renders only.
+            $settings = $project.Settings
+            $settingDefaults = @{
+                MinimumDuration = 5.0; MaximumDuration = 7.0; ZoomMaximum = 110.0
+                BlurAmount = 40.0; BackgroundBrightness = 65.0; Quality = 'YouTube'
             }
+            foreach ($key in $settingDefaults.Keys) {
+                if ($null -eq $settings.PSObject.Properties[$key]) {
+                    $settings | Add-Member -NotePropertyName $key -NotePropertyValue $settingDefaults[$key]
+                }
+            }
+            if ($null -eq $settings.PSObject.Properties['CaptionMode']) {
+                $settings | Add-Member -NotePropertyName CaptionMode -NotePropertyValue $captionMode
+            }
+            else { $settings.CaptionMode = $captionMode }
             $filterBackend = Select-AvailableFilterBackend -Timeline $project.Timeline -Settings $settings -WatermarkPath ([string]$project.WatermarkPath)
             $projectRun = Join-Path $batchDirectory ('project-{0:D3}' -f $index)
             New-Item -ItemType Directory -Path $projectRun -Force | Out-Null
