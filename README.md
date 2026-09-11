@@ -1,6 +1,6 @@
 # Slideshow Video Tool
 
-A portable Windows 11 tool for turning a folder of images and an M4A voiceover into a 1920x1080, 24 FPS YouTube video.
+A portable Windows 11 tool for turning a folder of images and a voiceover into a 1920x1080, 24 FPS YouTube video. The voiceover may be an M4A, MP3, WAV, AAC, FLAC, OGG or OPUS file; it is re-encoded to AAC either way.
 
 ## What it does
 
@@ -60,6 +60,7 @@ A portable Windows 11 tool for turning a folder of images and an M4A voiceover i
   segment cannot be done accurately without re-encoding it anyway.
 - Renders the final video in resumable 30-second segments, several at a time - as many as the machine's cores, memory and graphics encoder allow, up to six.
 - Batch-renders multiple saved project files sequentially.
+- Scans a folder of channel folders and queues a whole day of videos in one click.
 - Keeps persistent render history with completed, failed, paused, and resumable final and batch jobs.
 - Uses NVIDIA NVENC for H.264 encoding where the graphics card provides it.
 - Uses a custom OpenCL compositor for colour-correct RGB Screen blending so the watermark does not crush shadows or posterize photos.
@@ -95,7 +96,7 @@ The folder is portable. Keep these files and folders together:
 ## Workflow
 
 1. Select a folder containing JPG, JPEG, PNG, or WEBP images. Only files directly inside that folder are used.
-2. Select the M4A voiceover.
+2. Select the voiceover.
 3. Select the full-frame MOV or MP4 animated watermark.
 4. Choose the final MP4 filename using **Save As**.
 5. Adjust image timing, zoom, captions, blur, brightness, and quality if needed. Use the
@@ -109,15 +110,49 @@ The first caption run downloads an offline multilingual speech model (about 465 
 After captions are generated, use **Edit Captions** to correct the SRT before rendering. The editor remains open beside the main player, so text and timestamp edits can be checked while seeking or playing. Caption changes never require regenerating the 60-second preview; a burned-caption final export applies the current style and SRT during rendering.
 
 For batch work, click **Batch Projects**. Add any number of videos, selecting an
-images folder, M4A voiceover, **watermark** and MP4 output for each one, then click
+images folder, voiceover, **watermark** and MP4 output for each one, then click
 **Render All**; the tool builds the projects and renders them one at a time so the
-laptop is not overloaded.
+laptop is not overloaded. A video added by mistake is dropped with **Remove**.
 
 Each video carries its own watermark, so one batch can mix videos that do not share
 one. The box at the top of that window is a starting value only: it fills in the
 watermark of each video as you add it, which keeps a batch that does share one
 watermark to a single browse. Every video must end up with a watermark, and what
 renders is always the video's own.
+
+### Scanning a channels folder
+
+**Scan Channels Folder**, in the same window, queues a day of videos across several
+channels without pointing at each folder by hand. Pick the folder that holds the
+channel folders; the shape it expects inside each one is:
+
+```
+Youtube Channels\
+  1. Channel One\
+    watermark.mov           <- one watermark video for this channel
+    videos data\
+      1\                    <- the images for video 1
+      2\
+      1.mp3                 <- the voiceover for video 1
+      2.mp3
+  2. Channel Two\
+    ...
+```
+
+Every numbered folder that has a voiceover of the same name beside it becomes a
+queued video, already carrying its channel's watermark, and already aimed at that
+channel's `Renders` folder - which is created when the render starts. All that is
+left to type is the name of each video, and the row shows the file it will write
+as the name is typed. Because only the contents change from day to day, tomorrow
+is the same scan of the same folder.
+
+The folder may be called `videos data`, `Videos_Data` or `videos-data`; a channel
+that keeps its numbered folders directly in the channel folder scans too. A
+channel folder holding several videos needs `watermark` in the name of the one to
+use, otherwise the choice is ambiguous and the channel is skipped. Anything that
+cannot be paired - a folder with no voiceover, a voiceover with no folder, a
+folder with no images - is counted in the line above the list and named in full
+when hovering over it, rather than being queued half-configured.
 
 Motion and caption settings come from the main window and are applied to every
 queued video. The same window also retains **Render Saved Projects** for existing

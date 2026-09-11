@@ -140,6 +140,13 @@ $script:SettingsPath = Join-Path $script:DataRoot 'settings.json'
 $script:PreviewPath = Join-Path $script:DataRoot 'preview.mp4'
 $script:LastErrorPath = Join-Path $script:DataRoot 'last-error.log'
 $script:DiagnosticLogPath = Join-Path $script:DataRoot 'tool-diagnostic.log'
+# The render worker re-encodes the voiceover to AAC whatever container it
+# arrives in, so the tool accepts the usual voiceover formats rather than M4A
+# alone. Folders prepared per channel normally hold MP3s.
+$script:VoiceoverExtensions = @('.m4a', '.mp3', '.wav', '.aac', '.flac', '.ogg', '.opus')
+$script:VoiceoverFilter = 'Voiceover audio (*.m4a;*.mp3;*.wav;*.aac;*.flac;*.ogg;*.opus)|*.m4a;*.mp3;*.wav;*.aac;*.flac;*.ogg;*.opus|All files (*.*)|*.*'
+# Remembered so tomorrow's scan of the same channels folder is one click.
+$script:LastChannelsRoot = ''
 New-Item -ItemType Directory -Path $script:DataRoot -Force | Out-Null
 
 $xaml = @'
@@ -1582,6 +1589,7 @@ function Save-UserSettings {
         $settings | Add-Member -NotePropertyName LastImageFolder -NotePropertyValue $ImageFolderText.Text
         $settings | Add-Member -NotePropertyName LastAudioPath -NotePropertyValue $AudioText.Text
         $settings | Add-Member -NotePropertyName LastWatermarkPath -NotePropertyValue $WatermarkText.Text
+        $settings | Add-Member -NotePropertyName LastChannelsRoot -NotePropertyValue $script:LastChannelsRoot
         $json = $settings | ConvertTo-Json -Depth 4
         [IO.File]::WriteAllText($script:SettingsPath, $json, [Text.UTF8Encoding]::new($false))
     }
@@ -1634,6 +1642,7 @@ function Load-UserSettings {
         if ($null -ne $settings.LastImageFolder) { $ImageFolderText.Text = [string]$settings.LastImageFolder }
         if ($null -ne $settings.LastAudioPath) { $AudioText.Text = [string]$settings.LastAudioPath }
         if ($null -ne $settings.LastWatermarkPath) { $WatermarkText.Text = [string]$settings.LastWatermarkPath }
+        if ($null -ne $settings.PSObject.Properties['LastChannelsRoot']) { $script:LastChannelsRoot = [string]$settings.LastChannelsRoot }
     }
     catch {
         $StatusText.Text = 'Saved settings could not be loaded; defaults are being used.'
@@ -2581,7 +2590,7 @@ function Get-PlanSignature {
         "$($file.FullName)|$($file.Length)|$($file.LastWriteTimeUtc.Ticks)"
     }
     if ([string]::IsNullOrWhiteSpace($AudioPath)) { $AudioPath = $AudioText.Text.Trim() }
-    if ([string]::IsNullOrWhiteSpace($AudioPath)) { throw 'Select a valid M4A voiceover.' }
+    if ([string]::IsNullOrWhiteSpace($AudioPath)) { throw 'Select a valid voiceover file.' }
     $audio = Get-Item -LiteralPath $AudioPath
     return @(
         ($imageDetails -join ';'),
@@ -2827,8 +2836,8 @@ function Start-CaptionGeneration {
     try {
         Assert-FFmpegAvailable
         $audioPath = $AudioText.Text.Trim()
-        if (-not (Test-Path -LiteralPath $audioPath -PathType Leaf) -or [IO.Path]::GetExtension($audioPath).ToLowerInvariant() -ne '.m4a') {
-            throw 'Select a valid M4A voiceover before generating captions.'
+        if (-not (Test-VoiceoverFile $audioPath)) {
+            throw 'Select a valid voiceover file before generating captions.'
         }
         $outputSrt = Get-CaptionCachePath -AudioPath $audioPath -DataRoot $script:DataRoot
         if (-not $Force -and (Test-Path -LiteralPath $outputSrt -PathType Leaf)) {
@@ -3769,6 +3778,110 @@ function Show-RenderHistory {
     }
 }
 
+function Test-VoiceoverFile {
+    param([string]$Path)
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
+    return $script:VoiceoverExtensions -contains ([IO.Path]::GetExtension($Path).ToLowerInvariant())
+}
+
+function Get-QueueOutputFileName {
+    # A scanned queue row asks for a name, not a path. This turns what was typed
+    # into the file name it will be saved as. Video titles carry colons and
+    # question marks that Windows will not take in a file name, so they are
+    # folded into dashes rather than refused - the row shows the name it settles
+    # on while it is being typed, so nothing changes behind the person's back.
+    param([string]$Name)
+    $trimmed = ([string]$Name).Trim()
+    if ([string]::IsNullOrWhiteSpace($trimmed)) { return '' }
+    $trimmed = $trimmed -replace '\s*:\s*', ' - '
+    $trimmed = $trimmed -replace '[?*"<>|]', ''
+    foreach ($forbidden in [IO.Path]::GetInvalidFileNameChars()) { $trimmed = $trimmed.Replace($forbidden, '-') }
+    $trimmed = ($trimmed -replace '\s{2,}', ' ').Trim().TrimEnd('.')
+    if ([string]::IsNullOrWhiteSpace($trimmed)) { return '' }
+    if ([IO.Path]::GetExtension($trimmed).ToLowerInvariant() -ne '.mp4') { $trimmed = "$trimmed.mp4" }
+    return $trimmed
+}
+
+function Get-NaturalSortKey {
+    # Folder 10 belongs after folder 9, and "2. Channel Two" after
+    # "1. Channel One", which plain text sorting gets backwards.
+    param([string]$Name)
+    if ($Name -match '^\s*(\d+)') { return ('{0:D12} {1}' -f [long]$Matches[1], $Name) }
+    return "zzzzzzzzzzzz $Name"
+}
+
+function Get-ChannelWatermarkPath {
+    # One watermark per channel folder. When a channel folder holds several
+    # videos, only a name saying "watermark" makes the choice unambiguous.
+    param([string]$ChannelFolder)
+    $videos = @(Get-ChildItem -LiteralPath $ChannelFolder -File -ErrorAction Stop | Where-Object { @('.mov', '.mp4') -contains $_.Extension.ToLowerInvariant() })
+    if ($videos.Count -eq 0) { return [pscustomobject]@{ Path = ''; Reason = 'no MOV or MP4 watermark sits in the channel folder' } }
+    if ($videos.Count -eq 1) { return [pscustomobject]@{ Path = $videos[0].FullName; Reason = '' } }
+    $named = @($videos | Where-Object { $_.Name -match 'watermark' })
+    if ($named.Count -eq 1) { return [pscustomobject]@{ Path = $named[0].FullName; Reason = '' } }
+    return [pscustomobject]@{ Path = ''; Reason = "$($videos.Count) videos sit in the channel folder - keep one, or put 'watermark' in the name of the one to use" }
+}
+
+function Get-ChannelQueueScan {
+    # Walks a folder of channel folders and pairs every numbered image folder
+    # with the voiceover of the same name, which is the shape the channels are
+    # kept in from day to day:
+    #
+    #   <root>\<channel>\<watermark>.mov
+    #   <root>\<channel>\videos data\1\      <- that video's images
+    #   <root>\<channel>\videos data\1.mp3   <- that video's voiceover
+    #
+    # Only the pairing is automatic. Whatever cannot be paired is reported back
+    # instead of being dropped, because a folder with no voiceover beside it is
+    # nearly always a mistake in the day's files rather than something to skip.
+    param([string]$Root)
+    if ([string]::IsNullOrWhiteSpace($Root) -or -not (Test-Path -LiteralPath $Root -PathType Container)) { throw "That folder does not exist:`r`n$Root" }
+    $items = [Collections.Generic.List[object]]::new()
+    $skipped = [Collections.Generic.List[string]]::new()
+    $channels = @(Get-ChildItem -LiteralPath $Root -Directory -ErrorAction Stop | Sort-Object { Get-NaturalSortKey $_.Name })
+    if ($channels.Count -eq 0) { throw "No channel folders were found in:`r`n$Root" }
+    foreach ($channel in $channels) {
+        $watermark = Get-ChannelWatermarkPath -ChannelFolder $channel.FullName
+        if ([string]::IsNullOrWhiteSpace($watermark.Path)) { $skipped.Add("$($channel.Name): $($watermark.Reason)"); continue }
+        $dataFolders = @(Get-ChildItem -LiteralPath $channel.FullName -Directory | Where-Object { ($_.Name -replace '[\s_\-]', '').ToLowerInvariant() -eq 'videosdata' })
+        # Falling back to the channel folder itself lets a channel that keeps its
+        # numbered folders one level up still scan.
+        $dataRoot = if ($dataFolders.Count -gt 0) { $dataFolders[0].FullName } else { $channel.FullName }
+        $audioByName = @{}
+        foreach ($file in Get-ChildItem -LiteralPath $dataRoot -File) {
+            if ($script:VoiceoverExtensions -notcontains $file.Extension.ToLowerInvariant()) { continue }
+            $key = $file.BaseName.ToLowerInvariant()
+            if (-not $audioByName.ContainsKey($key)) { $audioByName[$key] = $file.FullName }
+        }
+        $paired = @{}
+        $folders = @(Get-ChildItem -LiteralPath $dataRoot -Directory |
+            Where-Object { @('renders', 'videosdata') -notcontains ($_.Name -replace '[\s_\-]', '').ToLowerInvariant() } |
+            Sort-Object { Get-NaturalSortKey $_.Name })
+        foreach ($folder in $folders) {
+            $key = $folder.Name.ToLowerInvariant()
+            if (-not $audioByName.ContainsKey($key)) { $skipped.Add("$($channel.Name) \ $($folder.Name): no voiceover named $($folder.Name) beside it"); continue }
+            $images = @(Get-ChildItem -LiteralPath $folder.FullName -File | Where-Object { @('.jpg', '.jpeg', '.png', '.webp') -contains $_.Extension.ToLowerInvariant() })
+            if ($images.Count -eq 0) { $skipped.Add("$($channel.Name) \ $($folder.Name): the folder holds no JPG, PNG or WEBP images"); continue }
+            $paired[$key] = $true
+            $items.Add([pscustomobject]@{
+                Channel = $channel.Name
+                Label = "$($channel.Name) - $($folder.Name)"
+                ImageFolder = $folder.FullName
+                AudioPath = $audioByName[$key]
+                WatermarkPath = $watermark.Path
+                OutputFolder = (Join-Path $channel.FullName 'Renders')
+                ImageCount = $images.Count
+            })
+        }
+        foreach ($key in @($audioByName.Keys | Sort-Object { Get-NaturalSortKey $_ })) {
+            if ($paired.ContainsKey($key)) { continue }
+            $skipped.Add("$($channel.Name): $([IO.Path]::GetFileName($audioByName[$key])) has no image folder named $key")
+        }
+    }
+    return [pscustomobject]@{ Items = $items.ToArray(); Skipped = $skipped.ToArray() }
+}
+
 function Show-BulkQueueBuilder {
     # A queue item carries its own image folder, voiceover, watermark and
     # output, so one batch can mix videos that do not share a watermark. The
@@ -3827,14 +3940,18 @@ function Show-BulkQueueBuilder {
       </Setter>
     </Style>
   </Window.Resources>
-  <Grid Margin="18"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-    <TextBlock Text="Add as many videos as you need, each with its own watermark, then render them one at a time." FontSize="17" FontWeight="SemiBold"/>
+  <Grid Margin="18"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+    <TextBlock Text="Add videos one by one, or scan a channels folder to queue a whole day at once." FontSize="17" FontWeight="SemiBold"/>
     <Grid Grid.Row="1" Margin="0,14,0,12"><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-      <TextBlock Text="Watermark to start each new video with" VerticalAlignment="Center" Foreground="#A3A39E" ToolTip="This is only a starting value. Adding a video copies it into that video's own Watermark box, where you can change it. What renders is always the video's own watermark."/><TextBox x:Name="WatermarkText" Grid.Column="1" Margin="8,0"/><Button x:Name="BrowseWatermarkButton" Grid.Column="2" Content="Browse" Padding="12,6"/>
+      <TextBlock Text="Watermark to start each new video with" VerticalAlignment="Center" Foreground="#A3A39E" ToolTip="This is only a starting value. Adding a video copies it into that video's own Watermark box, where you can change it. What renders is always the video's own watermark. A scanned video takes the watermark from its own channel folder instead."/><TextBox x:Name="WatermarkText" Grid.Column="1" Margin="8,0"/><Button x:Name="BrowseWatermarkButton" Grid.Column="2" Content="Browse" Padding="12,6"/>
     </Grid>
-    <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto"><StackPanel x:Name="RowsPanel"/></ScrollViewer>
-    <Grid Grid.Row="3" Margin="0,14,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-      <Button x:Name="AddVideoButton" Content="+ Add Video" Padding="14,8" Background="#2A2119" BorderBrush="#8A5424"/>
+    <TextBlock x:Name="ScanSummaryText" Grid.Row="2" Visibility="Collapsed" Foreground="#E0913F" FontSize="12.5" TextWrapping="Wrap" Margin="0,0,0,10"/>
+    <ScrollViewer Grid.Row="3" VerticalScrollBarVisibility="Auto"><StackPanel x:Name="RowsPanel"/></ScrollViewer>
+    <Grid Grid.Row="4" Margin="0,14,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+      <StackPanel Orientation="Horizontal">
+        <Button x:Name="AddVideoButton" Content="+ Add Video" Padding="14,8" Background="#2A2119" BorderBrush="#8A5424"/>
+        <Button x:Name="ScanChannelsButton" Content="Scan Channels Folder" Padding="14,8" ToolTip="Pick the folder that holds your channel folders. Every numbered image folder with a voiceover of the same name is queued, with its own channel's watermark, ready to save into that channel's Renders folder."/>
+      </StackPanel>
       <Button x:Name="SavedProjectsButton" Grid.Column="2" Content="Render Saved Projects" Padding="14,8" Margin="4,0"/>
       <Button x:Name="RenderAllButton" Grid.Column="3" Content="Render All" Padding="16,8" Margin="4,0" Background="#E0913F" BorderBrush="#E0913F" Foreground="#1C1206" FontWeight="SemiBold"/>
     </Grid>
@@ -3848,9 +3965,30 @@ function Show-BulkQueueBuilder {
     $watermarkBox = $dialog.FindName('WatermarkText')
     $watermarkBox.Text = $WatermarkText.Text.Trim()
     $rowsPanel = $dialog.FindName('RowsPanel')
+    $summaryBlock = $dialog.FindName('ScanSummaryText')
+    $mutedBrush = [Windows.Media.BrushConverter]::new().ConvertFromString('#A3A39E')
+    # A closure runs inside a dynamic module of its own, where $script: reaches
+    # that module rather than this file: reading one there comes back empty and
+    # writing one there is lost. So the voiceover filter is copied in as a local,
+    # and the remembered channels root travels on an object the handler can
+    # change and this function can read back once the dialog has closed.
+    $voiceoverFilter = [string]$script:VoiceoverFilter
+    $scanState = [pscustomobject]@{ LastRoot = [string]$script:LastChannelsRoot }
     $rows = [Collections.Generic.List[object]]::new()
+    # A hand-added row is known by its position, so everything that adds or
+    # removes one calls this afterwards. A scanned row is known by the channel
+    # and folder it came from instead, which no renumbering can disturb.
+    $renumberRows = {
+        for ($position = 0; $position -lt $rows.Count; $position++) {
+            $entry = $rows[$position]
+            $entry.TitleBlock.Text = if ([string]::IsNullOrWhiteSpace([string]$entry.BaseTitle)) { "Video $($position + 1)" } else { [string]$entry.BaseTitle }
+        }
+    }.GetNewClosure()
     $addRow = {
-        $number = $rows.Count + 1
+        # $Preset is one result of a channel scan: it fills every box in and ties
+        # the output to that channel's Renders folder, which leaves only the name
+        # of the video to type.
+        param($Preset = $null)
         $border = [Windows.Controls.Border]::new()
         $border.BorderBrush = [Windows.Media.BrushConverter]::new().ConvertFromString('#33333A')
         $border.BorderThickness = [Windows.Thickness]::new(1)
@@ -3861,13 +3999,24 @@ function Show-BulkQueueBuilder {
         $header = [Windows.Controls.Grid]::new()
         $header.ColumnDefinitions.Add([Windows.Controls.ColumnDefinition]::new())
         $autoColumn = [Windows.Controls.ColumnDefinition]::new(); $autoColumn.Width = [Windows.GridLength]::Auto; $header.ColumnDefinitions.Add($autoColumn)
-        $title = [Windows.Controls.TextBlock]::new(); $title.Text = "Video $number"; $title.FontWeight = 'SemiBold'; $title.FontSize = 14
+        $title = [Windows.Controls.TextBlock]::new(); $title.FontWeight = 'SemiBold'; $title.FontSize = 14
         $remove = [Windows.Controls.Button]::new(); $remove.Content = 'Remove'; $remove.Padding = [Windows.Thickness]::new(10,4,10,4)
-        [Windows.Controls.Grid]::SetColumn($remove, 1); $header.Children.Add($title); $header.Children.Add($remove); $panel.Children.Add($header)
+        [Windows.Controls.Grid]::SetColumn($remove, 1); [void]$header.Children.Add($title); [void]$header.Children.Add($remove); [void]$panel.Children.Add($header)
         $imageBox = [Windows.Controls.TextBox]::new(); $audioBox = [Windows.Controls.TextBox]::new(); $outputBox = [Windows.Controls.TextBox]::new()
         $rowWatermarkBox = [Windows.Controls.TextBox]::new()
-        $rowWatermarkBox.Text = $watermarkBox.Text.Trim()
-        foreach ($definition in @(@('Images folder', $imageBox, 'Folder'), @('Voiceover (M4A)', $audioBox, 'Audio'), @('Watermark', $rowWatermarkBox, 'Watermark'), @('Output MP4', $outputBox, 'Output'))) {
+        $baseTitle = ''; $outputFolder = ''
+        if ($null -ne $Preset) {
+            $baseTitle = [string]$Preset.Label
+            $outputFolder = [string]$Preset.OutputFolder
+            $imageBox.Text = [string]$Preset.ImageFolder
+            $audioBox.Text = [string]$Preset.AudioPath
+            $rowWatermarkBox.Text = [string]$Preset.WatermarkPath
+        }
+        else { $rowWatermarkBox.Text = $watermarkBox.Text.Trim() }
+        $outputLabel = if ($null -ne $Preset) { 'Output name' } else { 'Output MP4' }
+        # A local, so the Browse closure below can capture it.
+        $audioFilter = $voiceoverFilter
+        foreach ($definition in @(@('Images folder', $imageBox, 'Folder'), @('Voiceover', $audioBox, 'Audio'), @('Watermark', $rowWatermarkBox, 'Watermark'), @($outputLabel, $outputBox, 'Output'))) {
             $grid = [Windows.Controls.Grid]::new(); $grid.Margin = [Windows.Thickness]::new(0,6,0,0)
             $labelColumn = [Windows.Controls.ColumnDefinition]::new(); $labelColumn.Width = [Windows.GridLength]::new(120); $grid.ColumnDefinitions.Add($labelColumn)
             $grid.ColumnDefinitions.Add([Windows.Controls.ColumnDefinition]::new())
@@ -3875,22 +4024,85 @@ function Show-BulkQueueBuilder {
             $label = [Windows.Controls.TextBlock]::new(); $label.Text = $definition[0]; $label.Foreground = [Windows.Media.BrushConverter]::new().ConvertFromString('#B9C1D0'); $label.VerticalAlignment = 'Center'
             $box = $definition[1]; [Windows.Controls.Grid]::SetColumn($box,1); $box.Margin = [Windows.Thickness]::new(8,0,8,0)
             $browse = [Windows.Controls.Button]::new(); $browse.Content = 'Browse'; $browse.Padding = [Windows.Thickness]::new(10,4,10,4); [Windows.Controls.Grid]::SetColumn($browse,2)
-            $grid.Children.Add($label); $grid.Children.Add($box); $grid.Children.Add($browse); $panel.Children.Add($grid)
+            [void]$grid.Children.Add($label); [void]$grid.Children.Add($box); [void]$grid.Children.Add($browse); [void]$panel.Children.Add($grid)
             if ($definition[2] -eq 'Folder') { $browse.Add_Click(({ $picked = Select-Folder -Description 'Select images folder'; if ($picked) { $box.Text = $picked } }).GetNewClosure()) }
-            elseif ($definition[2] -eq 'Audio') { $browse.Add_Click(({ $picked = Select-OpenFile -Title 'Select M4A voiceover' -Filter 'M4A audio (*.m4a)|*.m4a'; if ($picked) { $box.Text = $picked } }).GetNewClosure()) }
+            elseif ($definition[2] -eq 'Audio') { $browse.Add_Click(({ $picked = Select-OpenFile -Title 'Select voiceover' -Filter $audioFilter; if ($picked) { $box.Text = $picked } }).GetNewClosure()) }
             elseif ($definition[2] -eq 'Watermark') { $browse.Add_Click(({ $picked = Select-OpenFile -Title 'Select watermark video' -Filter 'Video files (*.mov;*.mp4)|*.mov;*.mp4'; if ($picked) { $box.Text = $picked } }).GetNewClosure()) }
             else { $browse.Add_Click(({ $picked = Select-SaveFile -Title 'Choose output MP4' -Filter 'MP4 video (*.mp4)|*.mp4' -DefaultExtension '.mp4'; if ($picked) { $box.Text = $picked } }).GetNewClosure()) }
         }
-        $row = [pscustomobject]@{ Border=$border; ImageBox=$imageBox; AudioBox=$audioBox; OutputBox=$outputBox; WatermarkBox=$rowWatermarkBox }
-        $remove.Add_Click(({ $rows.Remove($row); [void]$rowsPanel.Children.Remove($border) }).GetNewClosure())
-        $rows.Add($row); $rowsPanel.Children.Add($border)
+        if ($null -ne $Preset) {
+            # The box now takes a name rather than a path, so the row says which
+            # file that name will write, and keeps saying it as it is typed.
+            $hint = [Windows.Controls.TextBlock]::new()
+            $hint.Foreground = $mutedBrush; $hint.FontSize = 11; $hint.TextWrapping = 'Wrap'
+            $hint.Margin = [Windows.Thickness]::new(128, 4, 0, 0)
+            [void]$panel.Children.Add($hint)
+            $hintBlock = $hint; $hintBox = $outputBox; $hintFolder = $outputFolder; $hintImages = [int]$Preset.ImageCount
+            $updateHint = ({
+                $typed = Get-QueueOutputFileName $hintBox.Text
+                $hintBlock.Text = if ([string]::IsNullOrWhiteSpace($typed)) { "$hintImages images. Type a name - it is saved into $hintFolder" } else { "$hintImages images. Saves as $(Join-Path $hintFolder $typed)" }
+            }).GetNewClosure()
+            & $updateHint
+            $outputBox.Add_TextChanged($updateHint)
+        }
+        $row = [pscustomobject]@{ Border=$border; ImageBox=$imageBox; AudioBox=$audioBox; OutputBox=$outputBox; WatermarkBox=$rowWatermarkBox; TitleBlock=$title; BaseTitle=$baseTitle; OutputFolder=$outputFolder }
+        # GetNewClosure copies the variables of the scope it is called in, and that
+        # scope here is one invocation of $addRow - not the closure $addRow itself
+        # carries. Reading $rows or $rowsPanel straight from the click handler
+        # therefore found nothing, the null method call was swallowed by WPF, and
+        # Remove looked dead. Copying them into locals first puts them where the
+        # handler's own closure can capture them.
+        $rowList = $rows; $rowsHost = $rowsPanel; $renumber = $renumberRows
+        $remove.Add_Click(({
+            [void]$rowList.Remove($row)
+            [void]$rowsHost.Children.Remove($border)
+            & $renumber
+        }).GetNewClosure())
+        $rows.Add($row); [void]$rowsPanel.Children.Add($border)
+        & $renumberRows
     }.GetNewClosure()
     $dialog.FindName('BrowseWatermarkButton').Add_Click({ $picked = Select-OpenFile -Title 'Select watermark video' -Filter 'Video files (*.mov;*.mp4)|*.mov;*.mp4'; if ($picked) { $watermarkBox.Text = $picked } }.GetNewClosure())
     $dialog.FindName('AddVideoButton').Add_Click({ & $addRow }.GetNewClosure())
+    $dialog.FindName('ScanChannelsButton').Add_Click({
+        try {
+            $picked = Select-Folder -Description 'Select the folder that holds your channel folders' -InitialPath $scanState.LastRoot
+            if ([string]::IsNullOrWhiteSpace($picked)) { return }
+            $scan = Get-ChannelQueueScan -Root $picked
+            $found = @($scan.Items); $ignored = @($scan.Skipped)
+            if ($found.Count -eq 0) {
+                $summaryBlock.Text = "Nothing could be queued from $picked."
+                $summaryBlock.ToolTip = $null
+                $summaryBlock.Visibility = 'Visible'
+                Show-ErrorMessage ("Nothing in that folder could be queued:`r`n$picked`r`n`r`n" + ((@($ignored) | Select-Object -First 25) -join "`r`n")) 'Nothing to queue'
+                return
+            }
+            $scanState.LastRoot = $picked
+            # A scan replaces the blank starter row instead of queueing it as an
+            # empty video that would only fail when Render All checks it.
+            foreach ($existing in @($rows)) {
+                if (($existing.ImageBox.Text.Trim() -eq '') -and ($existing.AudioBox.Text.Trim() -eq '') -and ($existing.OutputBox.Text.Trim() -eq '')) {
+                    [void]$rows.Remove($existing); [void]$rowsPanel.Children.Remove($existing.Border)
+                }
+            }
+            foreach ($item in $found) { & $addRow $item }
+            $channelCount = @($found | ForEach-Object { $_.Channel } | Sort-Object -Unique).Count
+            $summary = "Queued $($found.Count) video(s) from $channelCount channel folder(s). Type a name for each, then Render All."
+            if ($ignored.Count -gt 0) { $summary = "$summary   ($($ignored.Count) skipped - hover here to see why.)" }
+            $summaryBlock.Text = $summary
+            $summaryBlock.ToolTip = if ($ignored.Count -gt 0) { $ignored -join "`r`n" } else { $null }
+            $summaryBlock.Visibility = 'Visible'
+            if ($rows.Count -gt 0) { [void]$rows[0].OutputBox.Focus() }
+        }
+        catch {
+            Write-ToolDiagnostic 'Scanning the channels folder failed.' $_.Exception
+            Show-ErrorMessage $_.Exception.Message 'Could not scan channels'
+        }
+    }.GetNewClosure())
     $dialog.FindName('SavedProjectsButton').Add_Click({ $dialog.Tag = 'saved'; $dialog.Close() }.GetNewClosure())
     $dialog.FindName('RenderAllButton').Add_Click({ $dialog.Tag = 'render'; $dialog.Close() }.GetNewClosure())
     & $addRow
     [void]$dialog.ShowDialog()
+    $script:LastChannelsRoot = [string]$scanState.LastRoot
     if ($dialog.Tag -eq 'saved') { Start-BatchRender; return }
     if ($dialog.Tag -ne 'render') { return }
 
@@ -3900,22 +4112,41 @@ function Show-BulkQueueBuilder {
         # Reading a watermark costs an FFprobe launch, and a batch of fifty
         # videos sharing one watermark would otherwise pay for it fifty times.
         $checkedWatermarks = @{}
+        # Two rows writing one file would leave a video of the day missing, and
+        # the batch would only find out after rendering both of them.
+        $claimedOutputs = @{}
         $queueDirectory = Join-Path (Join-Path $script:DataRoot 'queue-projects') ([guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Path $queueDirectory -Force | Out-Null
         $projectPaths = [Collections.Generic.List[string]]::new()
         for ($index = 0; $index -lt $rows.Count; $index++) {
-            $row = $rows[$index]; $imageFolder = $row.ImageBox.Text.Trim(); $audio = $row.AudioBox.Text.Trim(); $output = $row.OutputBox.Text.Trim()
+            $row = $rows[$index]; $label = [string]$row.TitleBlock.Text
+            $imageFolder = $row.ImageBox.Text.Trim(); $audio = $row.AudioBox.Text.Trim(); $output = $row.OutputBox.Text.Trim()
             $watermark = $row.WatermarkBox.Text.Trim()
-            if ([string]::IsNullOrWhiteSpace($watermark) -or -not (Test-Path -LiteralPath $watermark -PathType Leaf) -or @('.mov','.mp4') -notcontains [IO.Path]::GetExtension($watermark).ToLowerInvariant()) { throw "Video $($index + 1): select a valid MOV or MP4 watermark." }
+            $outputFolder = [string]$row.OutputFolder
+            if (-not [string]::IsNullOrWhiteSpace($outputFolder)) {
+                # A scanned row holds a name, not a path: its folder was decided
+                # by the channel it came from, and is created when it is needed.
+                if ([string]::IsNullOrWhiteSpace($output)) { throw "$($label): type a name for this video." }
+                if (-not [IO.Path]::IsPathRooted($output) -and $output.IndexOfAny([char[]]@('\', '/')) -lt 0) {
+                    $fileName = Get-QueueOutputFileName $output
+                    if ([string]::IsNullOrWhiteSpace($fileName)) { throw "$($label): nothing is left of that name once the characters Windows forbids in a file name are taken out." }
+                    if (-not (Test-Path -LiteralPath $outputFolder -PathType Container)) { New-Item -ItemType Directory -Path $outputFolder -Force | Out-Null }
+                    $output = Join-Path $outputFolder $fileName
+                }
+            }
+            if ([string]::IsNullOrWhiteSpace($watermark) -or -not (Test-Path -LiteralPath $watermark -PathType Leaf) -or @('.mov','.mp4') -notcontains [IO.Path]::GetExtension($watermark).ToLowerInvariant()) { throw "$($label): select a valid MOV or MP4 watermark." }
             if (-not $checkedWatermarks.ContainsKey($watermark)) {
-                if (-not (Test-VideoStream $watermark)) { throw "Video $($index + 1): FFprobe could not read the selected watermark video." }
+                if (-not (Test-VideoStream $watermark)) { throw "$($label): FFprobe could not read the selected watermark video." }
                 $checkedWatermarks[$watermark] = $true
             }
-            if ([string]::IsNullOrWhiteSpace($imageFolder) -or -not (Test-Path -LiteralPath $imageFolder -PathType Container)) { throw "Video $($index + 1): select a valid images folder." }
-            if ([string]::IsNullOrWhiteSpace($audio) -or -not (Test-Path -LiteralPath $audio -PathType Leaf) -or [IO.Path]::GetExtension($audio).ToLowerInvariant() -ne '.m4a') { throw "Video $($index + 1): select a valid M4A voiceover." }
-            if ([string]::IsNullOrWhiteSpace($output) -or [IO.Path]::GetExtension($output).ToLowerInvariant() -ne '.mp4') { throw "Video $($index + 1): choose an output MP4 file." }
+            if ([string]::IsNullOrWhiteSpace($imageFolder) -or -not (Test-Path -LiteralPath $imageFolder -PathType Container)) { throw "$($label): select a valid images folder." }
+            if (-not (Test-VoiceoverFile $audio)) { throw "$($label): select a valid voiceover file (M4A, MP3, WAV, AAC, FLAC, OGG or OPUS)." }
+            if ([string]::IsNullOrWhiteSpace($output) -or [IO.Path]::GetExtension($output).ToLowerInvariant() -ne '.mp4') { throw "$($label): choose an output MP4 file." }
             $outputDirectory = Split-Path -Parent $output
-            if ([string]::IsNullOrWhiteSpace($outputDirectory) -or -not (Test-Path -LiteralPath $outputDirectory -PathType Container)) { throw "Video $($index + 1): the output folder does not exist." }
+            if ([string]::IsNullOrWhiteSpace($outputDirectory) -or -not (Test-Path -LiteralPath $outputDirectory -PathType Container)) { throw "$($label): the output folder does not exist." }
+            $outputKey = $output.ToLowerInvariant()
+            if ($claimedOutputs.ContainsKey($outputKey)) { throw "$($label) and $($claimedOutputs[$outputKey]) would both write:`r`n$output`r`n`r`nGive them different names." }
+            $claimedOutputs[$outputKey] = $label
             $images = @(Get-ValidatedImages $imageFolder)
             $duration = Get-MediaDurationSeconds -FfprobePath $script:FfprobePath -MediaPath $audio
             $timeline = New-TimelinePlan -ImagePaths $images -AudioDurationSeconds $duration -MinimumDurationSeconds $settings.MinimumDuration -MaximumDurationSeconds $settings.MaximumDuration -Fps $script:DeliveryFps
@@ -4178,8 +4409,8 @@ function Start-VideoRender {
         if (-not (Test-Path -LiteralPath $imageFolder -PathType Container)) {
             throw 'Select a valid image folder.'
         }
-        if (-not (Test-Path -LiteralPath $audioPath -PathType Leaf) -or [IO.Path]::GetExtension($audioPath).ToLowerInvariant() -ne '.m4a') {
-            throw 'Select a valid M4A voiceover file.'
+        if (-not (Test-VoiceoverFile $audioPath)) {
+            throw 'Select a valid voiceover file.'
         }
         $script:CaptionPath = Get-CaptionCachePath -AudioPath $audioPath -DataRoot $script:DataRoot
         if ($settings.CaptionMode -ne 'Off' -and -not (Test-Path -LiteralPath $script:CaptionPath -PathType Leaf)) {
@@ -4636,7 +4867,7 @@ function Open-Project {
             }
         }
 
-        $audioPath = Resolve-MissingMediaFile -Path ([string]$project.AudioPath) -Title 'Locate voiceover' -Filter 'M4A audio (*.m4a)|*.m4a'
+        $audioPath = Resolve-MissingMediaFile -Path ([string]$project.AudioPath) -Title 'Locate voiceover' -Filter $script:VoiceoverFilter
         $watermarkPath = Resolve-MissingMediaFile -Path ([string]$project.WatermarkPath) -Title 'Locate watermark' -Filter 'Video files (*.mov;*.mp4)|*.mov;*.mp4'
 
         $script:IsLoading = $true
@@ -4878,7 +5109,7 @@ $BrowseImagesButton.Add_Click({
     if ($selected) { $ImageFolderText.Text = $selected }
 })
 $BrowseAudioButton.Add_Click({
-    $selected = Select-OpenFile -Title 'Select M4A voiceover' -Filter 'M4A audio (*.m4a)|*.m4a' -InitialPath $AudioText.Text
+    $selected = Select-OpenFile -Title 'Select voiceover' -Filter $script:VoiceoverFilter -InitialPath $AudioText.Text
     if ($selected) {
         $AudioText.Text = $selected
         if ($script:FfprobePath) {
