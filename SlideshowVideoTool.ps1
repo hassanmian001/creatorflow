@@ -3806,6 +3806,39 @@ function Get-QueueOutputFileName {
     return $trimmed
 }
 
+function Resolve-QueueOutputPath {
+    # A scanned row's Output box starts out holding its folder, ending in a
+    # backslash, and the name is typed after it. Everything after the last
+    # backslash is the name; everything before it is the folder. A bare name
+    # with no backslash at all goes into the row's own folder. Returns the MP4
+    # that comes to, or nothing while there is no usable name yet.
+    #
+    # Only a backslash separates. A forward slash inside a title ("AC/DC") is
+    # part of the name and becomes a dash, rather than a folder that does not
+    # exist.
+    param([string]$Text, [string]$DefaultFolder)
+    $typed = ([string]$Text).Trim()
+    if ([string]::IsNullOrWhiteSpace($typed)) { return '' }
+    $folder = $DefaultFolder
+    $name = $typed
+    $cut = $typed.LastIndexOf('\')
+    if ($cut -ge 0) {
+        $folder = $typed.Substring(0, $cut)
+        $name = $typed.Substring($cut + 1)
+        if ($folder -match '^[A-Za-z]:$') { $folder = "$folder\" }
+    }
+    $fileName = Get-QueueOutputFileName $name
+    if ([string]::IsNullOrWhiteSpace($fileName) -or [string]::IsNullOrWhiteSpace($folder)) { return '' }
+    try {
+        if (-not [IO.Path]::IsPathRooted($folder)) { $folder = Join-Path $DefaultFolder $folder }
+        return [IO.Path]::Combine($folder, $fileName)
+    }
+    catch {
+        # Characters Windows refuses in a folder path; there is no file yet.
+        return ''
+    }
+}
+
 function Get-NaturalSortKey {
     # Folder 10 belongs after folder 9, and "2. Channel Two" after
     # "1. Channel One", which plain text sorting gets backwards.
@@ -3851,6 +3884,12 @@ function Get-ChannelQueueScan {
         # Falling back to the channel folder itself lets a channel that keeps its
         # numbered folders one level up still scan.
         $dataRoot = if ($dataFolders.Count -gt 0) { $dataFolders[0].FullName } else { $channel.FullName }
+        # Finished videos are saved beside the day's data, in the videos data
+        # folder itself. A channel without one keeps its data in the channel
+        # folder, where a rendered MP4 would stand next to the watermark and
+        # leave the next scan unable to tell which is which, so it gets a
+        # Renders folder instead.
+        $outputFolder = if ($dataFolders.Count -gt 0) { $dataFolders[0].FullName } else { Join-Path $channel.FullName 'Renders' }
         $audioByName = @{}
         foreach ($file in Get-ChildItem -LiteralPath $dataRoot -File) {
             if ($script:VoiceoverExtensions -notcontains $file.Extension.ToLowerInvariant()) { continue }
@@ -3873,7 +3912,7 @@ function Get-ChannelQueueScan {
                 ImageFolder = $folder.FullName
                 AudioPath = $audioByName[$key]
                 WatermarkPath = $watermark.Path
-                OutputFolder = (Join-Path $channel.FullName 'Renders')
+                OutputFolder = $outputFolder
                 ImageCount = $images.Count
             })
         }
@@ -4014,6 +4053,8 @@ function Show-BulkQueueBuilder {
             $imageBox.Text = [string]$Preset.ImageFolder
             $audioBox.Text = [string]$Preset.AudioPath
             $rowWatermarkBox.Text = [string]$Preset.WatermarkPath
+            # The folder is already there; only the name is typed after it.
+            $outputBox.Text = $outputFolder.TrimEnd('\') + '\'
         }
         else { $rowWatermarkBox.Text = $watermarkBox.Text.Trim() }
         $outputLabel = if ($null -ne $Preset) { 'Output name' } else { 'Output MP4' }
@@ -4034,19 +4075,22 @@ function Show-BulkQueueBuilder {
             else { $browse.Add_Click(({ $picked = Select-SaveFile -Title 'Choose output MP4' -Filter 'MP4 video (*.mp4)|*.mp4' -DefaultExtension '.mp4'; if ($picked) { $box.Text = $picked } }).GetNewClosure()) }
         }
         if ($null -ne $Preset) {
-            # The box now takes a name rather than a path, so the row says which
-            # file that name will write, and keeps saying it as it is typed.
+            # The row says which file the box will write, and keeps saying it as
+            # the name is typed.
             $hint = [Windows.Controls.TextBlock]::new()
             $hint.Foreground = $mutedBrush; $hint.FontSize = 11; $hint.TextWrapping = 'Wrap'
             $hint.Margin = [Windows.Thickness]::new(128, 4, 0, 0)
             [void]$panel.Children.Add($hint)
             $hintBlock = $hint; $hintBox = $outputBox; $hintFolder = $outputFolder; $hintImages = [int]$Preset.ImageCount
             $updateHint = ({
-                $typed = Get-QueueOutputFileName $hintBox.Text
-                $hintBlock.Text = if ([string]::IsNullOrWhiteSpace($typed)) { "$hintImages images. Type a name - it is saved into $hintFolder" } else { "$hintImages images. Saves as $(Join-Path $hintFolder $typed)" }
+                $target = Resolve-QueueOutputPath -Text $hintBox.Text -DefaultFolder $hintFolder
+                $hintBlock.Text = if ([string]::IsNullOrWhiteSpace($target)) { "$hintImages images. Type the video's name after the folder." } else { "$hintImages images. Saves as $target" }
             }).GetNewClosure()
             & $updateHint
             $outputBox.Add_TextChanged($updateHint)
+            # Tabbing in lands after the folder, where the name goes. A click
+            # still puts the caret wherever it was clicked.
+            $outputBox.Add_GotKeyboardFocus({ $this.CaretIndex = $this.Text.Length })
         }
         $row = [pscustomobject]@{ Border=$border; ImageBox=$imageBox; AudioBox=$audioBox; OutputBox=$outputBox; WatermarkBox=$rowWatermarkBox; TitleBlock=$title; BaseTitle=$baseTitle; OutputFolder=$outputFolder }
         # GetNewClosure copies the variables of the scope it is called in, and that
@@ -4094,7 +4138,7 @@ function Show-BulkQueueBuilder {
             $summaryBlock.Text = $summary
             $summaryBlock.ToolTip = if ($ignored.Count -gt 0) { $ignored -join "`r`n" } else { $null }
             $summaryBlock.Visibility = 'Visible'
-            if ($rows.Count -gt 0) { [void]$rows[0].OutputBox.Focus() }
+            if ($rows.Count -gt 0) { [void]$rows[0].OutputBox.Focus(); $rows[0].OutputBox.CaretIndex = $rows[0].OutputBox.Text.Length }
         }
         catch {
             Write-ToolDiagnostic 'Scanning the channels folder failed.' $_.Exception
@@ -4127,15 +4171,16 @@ function Show-BulkQueueBuilder {
             $watermark = $row.WatermarkBox.Text.Trim()
             $outputFolder = [string]$row.OutputFolder
             if (-not [string]::IsNullOrWhiteSpace($outputFolder)) {
-                # A scanned row holds a name, not a path: its folder was decided
-                # by the channel it came from, and is created when it is needed.
-                if ([string]::IsNullOrWhiteSpace($output)) { throw "$($label): type a name for this video." }
-                if (-not [IO.Path]::IsPathRooted($output) -and $output.IndexOfAny([char[]]@('\', '/')) -lt 0) {
-                    $fileName = Get-QueueOutputFileName $output
-                    if ([string]::IsNullOrWhiteSpace($fileName)) { throw "$($label): nothing is left of that name once the characters Windows forbids in a file name are taken out." }
-                    if (-not (Test-Path -LiteralPath $outputFolder -PathType Container)) { New-Item -ItemType Directory -Path $outputFolder -Force | Out-Null }
-                    $output = Join-Path $outputFolder $fileName
+                # A scanned row's box holds its folder with the name typed after
+                # it. The row's own folder is created if it is missing; any other
+                # folder typed into the box has to exist already.
+                $resolved = Resolve-QueueOutputPath -Text $output -DefaultFolder $outputFolder
+                if ([string]::IsNullOrWhiteSpace($resolved)) { throw "$($label): type a name for this video after the folder in its Output name box." }
+                $resolvedFolder = Split-Path -Parent $resolved
+                if ([string]::Equals($resolvedFolder.TrimEnd('\'), $outputFolder.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase) -and -not (Test-Path -LiteralPath $resolvedFolder -PathType Container)) {
+                    New-Item -ItemType Directory -Path $resolvedFolder -Force | Out-Null
                 }
+                $output = $resolved
             }
             if ([string]::IsNullOrWhiteSpace($watermark) -or -not (Test-Path -LiteralPath $watermark -PathType Leaf) -or @('.mov','.mp4') -notcontains [IO.Path]::GetExtension($watermark).ToLowerInvariant()) { throw "$($label): select a valid MOV or MP4 watermark." }
             if (-not $checkedWatermarks.ContainsKey($watermark)) {

@@ -140,11 +140,18 @@ Youtube Channels\
 ```
 
 Every numbered folder that has a voiceover of the same name beside it becomes a
-queued video, already carrying its channel's watermark, and already aimed at that
-channel's `Renders` folder - which is created when the render starts. All that is
-left to type is the name of each video, and the row shows the file it will write
-as the name is typed. Because only the contents change from day to day, tomorrow
-is the same scan of the same folder.
+queued video, already carrying its channel's watermark. Its **Output name** box
+already holds that channel's `videos data` folder, ending in a backslash, so the
+finished video is saved beside the day's data; type the video's name after it.
+The row shows the file it will write as the name is typed. A bare name with no
+folder goes into the same place, and a title's colons and question marks are
+turned into something Windows accepts. Because only the contents change from day
+to day, tomorrow is the same scan of the same folder.
+
+A channel that keeps its numbered folders directly in the channel folder saves
+into a `Renders` folder there instead, created when the render starts - a
+finished MP4 standing next to the watermark would leave the next scan unable to
+tell which of the two is the watermark.
 
 The folder may be called `videos data`, `Videos_Data` or `videos-data`; a channel
 that keeps its numbered folders directly in the channel folder scans too. A
