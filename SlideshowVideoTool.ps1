@@ -1160,7 +1160,6 @@ $script:LastLiveCaptionText = ''
 $script:IsApplyingCaptionPreset = $false
 $script:PendingRenderAfterCaptions = $null
 $script:LastHistoryProgressBucket = -1
-$script:LowResolutionWarningFolder = ''
 $script:RenderHistoryPath = Join-Path $script:DataRoot 'render-history.json'
 $script:RenderJobsRoot = Join-Path $script:DataRoot 'render-jobs'
 $script:RenderHistory = @()
@@ -2563,11 +2562,15 @@ function Get-ValidatedImages {
     if ($valid.Count -lt 2) {
         throw 'At least two readable images are required.'
     }
-    if ($upscaled.Count -gt 0 -and -not [string]::Equals($script:LowResolutionWarningFolder, $Folder, [StringComparison]::OrdinalIgnoreCase)) {
-        $examples = @($upscaled | Select-Object -First 8) -join "`r`n"
-        $more = if ($upscaled.Count -gt 8) { "`r`n...and $($upscaled.Count - 8) more." } else { '' }
-        Show-InfoMessage "$($upscaled.Count) image(s) are smaller than their fitted 1080p display size and must be enlarged. The renderer will use high-quality Lanczos scaling, but it cannot recreate detail missing from the originals. Use YouTube quality and source images of at least 1920x1080 when possible.`r`n`r`n$examples$more" 'Low-resolution images'
-        $script:LowResolutionWarningFolder = $Folder
+    if ($upscaled.Count -gt 0) {
+        # Advice, not a question: the video renders the same way whatever the
+        # answer, with Lanczos enlarging the small images. As a message box it
+        # stopped a batch once for every folder in it, so it is a status line
+        # and a log entry now.
+        $StatusText.Text = "$($upscaled.Count) of $($valid.Count) images in this folder are below 1080p and will be enlarged."
+        $examples = @($upscaled | Select-Object -First 8) -join '; '
+        $more = if ($upscaled.Count -gt 8) { "; and $($upscaled.Count - 8) more" } else { '' }
+        Write-ToolDiagnostic "Low-resolution images in $($Folder): $($upscaled.Count) of $($valid.Count) will be enlarged to fit 1080p. $examples$more"
     }
     return $valid.ToArray()
 }
