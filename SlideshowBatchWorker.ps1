@@ -35,8 +35,32 @@ function Quote-Argument {
     return '"' + $Value.Replace('"', '\"') + '"'
 }
 
+function Get-ChildFailureReason {
+    # The render and caption workers write why they stopped - usually FFmpeg's
+    # own words - to an error log in the project's run folder. The app deletes
+    # that folder once the batch has stopped, so a reason not carried up into
+    # the batch's own error is gone for good, and all anyone ever saw was
+    # "rendering failed for project 1".
+    param([string]$ErrorPath)
+    if ([string]::IsNullOrWhiteSpace($ErrorPath) -or -not (Test-Path -LiteralPath $ErrorPath -PathType Leaf)) { return '' }
+    $raw = ''
+    try { $raw = [IO.File]::ReadAllText($ErrorPath, [Text.Encoding]::UTF8) } catch { return '' }
+    if ([string]::IsNullOrWhiteSpace($raw)) { return '' }
+    # The log is an exception dump: "Type: message", then the stack. Only the
+    # message tells a person anything.
+    $lines = [Collections.Generic.List[string]]::new()
+    foreach ($line in ($raw -split "`r?`n")) {
+        if ($line -match '^\s+at ' -or $line -match '^at .+: line \d+') { break }
+        if ($lines.Count -eq 0) { $line = $line -replace '^[\w.]+Exception:\s*', '' }
+        if (-not [string]::IsNullOrWhiteSpace($line)) { $lines.Add($line.TrimEnd()) }
+    }
+    # FFmpeg can run long, and its last lines are the ones that name the fault.
+    if ($lines.Count -gt 18) { return ((@($lines[0], '...') + @($lines | Select-Object -Last 16)) -join "`r`n") }
+    return ($lines -join "`r`n")
+}
+
 function Invoke-ChildWorker {
-    param([string]$ScriptPath, [string]$ChildJobPath, [string]$ChildProgressPath, [int]$Index, [int]$Count, [string]$Label)
+    param([string]$ScriptPath, [string]$ChildJobPath, [string]$ChildProgressPath, [string]$ChildErrorPath, [int]$Index, [int]$Count, [string]$Label, [string]$Title = '')
     $args = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$ScriptPath,'-JobPath',$ChildJobPath)
     $line = (($args | ForEach-Object { Quote-Argument $_ }) -join ' ')
     $process = Start-Process -FilePath 'powershell.exe' -ArgumentList $line -PassThru -WindowStyle Hidden
@@ -50,7 +74,14 @@ function Invoke-ChildWorker {
         $process.Refresh()
     }
     $process.WaitForExit(); $process.Refresh()
-    if ($process.ExitCode -ne 0) { throw "$Label failed for project $($Index + 1)." }
+    if ($process.ExitCode -ne 0) {
+        $which = "project $($Index + 1) of $Count"
+        if (-not [string]::IsNullOrWhiteSpace($Title)) { $which = "$which ($Title)" }
+        $stage = $Label.Substring(0, 1).ToUpperInvariant() + $Label.Substring(1)
+        $reason = Get-ChildFailureReason $ChildErrorPath
+        if ([string]::IsNullOrWhiteSpace($reason)) { throw "$stage failed for $which. The worker left no reason behind." }
+        throw "$stage failed for $($which):`r`n`r`n$reason"
+    }
 }
 
 try {
@@ -59,14 +90,17 @@ try {
     Write-BatchProgress 0 "Starting batch of $($items.Count) projects..."
     for ($index = 0; $index -lt $items.Count; $index++) {
         $item = $items[$index]
+        $title = if ($item.PSObject.Properties['DestinationPath']) { [IO.Path]::GetFileName([string]$item.DestinationPath) } else { '' }
         if ($item.PSObject.Properties['CaptionJobPath'] -and -not [string]::IsNullOrWhiteSpace([string]$item.CaptionJobPath)) {
             $captionJob = [IO.File]::ReadAllText([string]$item.CaptionJobPath, [Text.Encoding]::UTF8) | ConvertFrom-Json
             if (-not (Test-Path -LiteralPath ([string]$captionJob.OutputSrt) -PathType Leaf)) {
-                Invoke-ChildWorker -ScriptPath ([string]$job.CaptionWorkerPath) -ChildJobPath ([string]$item.CaptionJobPath) -ChildProgressPath ([string]$captionJob.ProgressPath) -Index $index -Count $items.Count -Label 'captions'
+                $captionErrorPath = if ($captionJob.PSObject.Properties['ErrorPath']) { [string]$captionJob.ErrorPath } else { '' }
+                Invoke-ChildWorker -ScriptPath ([string]$job.CaptionWorkerPath) -ChildJobPath ([string]$item.CaptionJobPath) -ChildProgressPath ([string]$captionJob.ProgressPath) -ChildErrorPath $captionErrorPath -Index $index -Count $items.Count -Label 'captions' -Title $title
             }
         }
         $renderJob = [IO.File]::ReadAllText([string]$item.RenderJobPath, [Text.Encoding]::UTF8) | ConvertFrom-Json
-        Invoke-ChildWorker -ScriptPath ([string]$job.RenderWorkerPath) -ChildJobPath ([string]$item.RenderJobPath) -ChildProgressPath ([string]$renderJob.ProgressPath) -Index $index -Count $items.Count -Label 'rendering'
+        $renderErrorPath = if ($renderJob.PSObject.Properties['ErrorPath']) { [string]$renderJob.ErrorPath } else { '' }
+        Invoke-ChildWorker -ScriptPath ([string]$job.RenderWorkerPath) -ChildJobPath ([string]$item.RenderJobPath) -ChildProgressPath ([string]$renderJob.ProgressPath) -ChildErrorPath $renderErrorPath -Index $index -Count $items.Count -Label 'rendering' -Title $title
         Write-BatchProgress ((($index + 1) / [double]$items.Count) * 100.0) "Completed project $($index + 1) of $($items.Count)."
     }
     if (Test-Path -LiteralPath ([string]$job.ChildPidPath) -PathType Leaf) { Remove-Item -LiteralPath ([string]$job.ChildPidPath) -Force }
@@ -74,7 +108,7 @@ try {
     exit 0
 }
 catch {
-    [IO.File]::WriteAllText([string]$job.ErrorPath, ($_.Exception.ToString() + "`r`n" + $_.ScriptStackTrace), [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText([string]$job.ErrorPath, ($_.Exception.Message + "`r`n`r`n--- worker stack ---`r`n" + $_.Exception.GetType().FullName + "`r`n" + $_.ScriptStackTrace), [Text.UTF8Encoding]::new($false))
     try { Write-BatchProgress 0 'Batch paused. Finished videos and resumable segments were kept.' } catch {}
     exit 1
 }

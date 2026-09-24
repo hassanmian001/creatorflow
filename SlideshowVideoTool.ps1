@@ -4364,7 +4364,9 @@ function Complete-BatchRender {
             $details = 'The batch worker stopped before all projects completed.'
             if (Test-Path -LiteralPath $state.ErrorPath -PathType Leaf) {
                 $raw = Get-Content -LiteralPath $state.ErrorPath -Raw -ErrorAction SilentlyContinue
-                if (-not [string]::IsNullOrWhiteSpace($raw)) { $details = $raw.Trim() }
+                # The worker's stack is kept in the log for diagnosis, below a
+                # marker; the person is shown what went wrong, not where.
+                if (-not [string]::IsNullOrWhiteSpace($raw)) { $details = ($raw -split '(?m)^--- worker stack ---')[0].Trim() }
             }
             throw $details
         }

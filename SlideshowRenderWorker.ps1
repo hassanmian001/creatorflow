@@ -202,9 +202,17 @@ function Test-EncoderSessionFailure {
     # slowly. GeForce drivers historically allowed only two or three NVENC
     # sessions at once; AMF and QSV have their own ceilings. The text below is
     # what each one prints when it runs out.
+    #
+    # The list used to know only NVENC's words. FFmpeg 7 no longer prints
+    # "Error initializing output stream" at all, and AMF says "encoder->Init()
+    # failed" or "CreateComponent(...) failed" before FFmpeg's own "Error while
+    # opening encoder" - none of which matched. On a Radeon, a lane the card
+    # refused therefore stopped the whole render instead of stepping down. A
+    # genuine fault that happens to match costs only the step-downs: once the
+    # render is down to one lane, the same failure is reported as it stands.
     param([string]$Details)
     if ([string]::IsNullOrWhiteSpace($Details)) { return $false }
-    return ($Details -match '(?i)OpenEncodeSessionEx|incompatible client key|out of memory|NV_ENC_ERR|no capable devices|Error initializing output stream|Cannot load nvEncodeAPI|failed to create encoder|D3D11|session')
+    return ($Details -match '(?i)OpenEncodeSessionEx|incompatible client key|out of memory|NV_ENC_ERR|no capable devices|Error initializing output stream|Error while opening encoder|Cannot load nvEncodeAPI|failed to create encoder|D3D11|session|encoder->Init\(\) failed|CreateComponent\(|CreateContext\(\) failed|InitDX1[01]\(\) failed|SubmitInput\(\) failed|AMF_|MFX_ERR|Error initializing an internal MFX session')
 }
 
 function Invoke-ParallelSegmentJobs {
