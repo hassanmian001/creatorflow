@@ -148,6 +148,35 @@ folder goes into the same place, and a title's colons and question marks are
 turned into something Windows accepts. Because only the contents change from day
 to day, tomorrow is the same scan of the same folder.
 
+#### Naming the videos with titles.txt
+
+Put a `titles.txt` in the channels folder itself, beside the channel folders, and
+the scan types the names in for you. One heading per channel in square brackets,
+then one line per video: the number of its folder, `=`, and the title.
+
+```
+[1. Star Scope Report]
+1 = Kylie Jenner's FIRST MAJOR ROLE Is Heading to Hulu... But Why?
+2 = Second video's title
+
+[2. K-Entertainment Pulse]
+1 = ...
+2 = ...
+```
+
+The heading may be the channel folder's full name, its number alone (`[1]`), or
+its name alone (`[Star Scope Report]`); case, spaces and punctuation do not
+matter. A heading may also start with `#` instead of brackets, and a title line
+may use `1.`, `1)`, `1:` or `1 -` instead of `1 =`. Blank lines are ignored. Save
+it as UTF-8 (Notepad's default) so non-English titles come through.
+
+Every named row still shows its full path and can be edited before Render All. A
+video the file does not name is left for you to type, and the caret waits in the
+first one. Whatever in the file could not be used - a heading that matches no
+channel, a title for a video that was not queued, a line that is neither a
+heading nor a title - is listed with the skipped items under the scan summary.
+Replace the titles each day along with the rest of the day's files.
+
 A channel that keeps its numbered folders directly in the channel folder saves
 into a `Renders` folder there instead, created when the render starts - a
 finished MP4 standing next to the watermark would leave the next scan unable to

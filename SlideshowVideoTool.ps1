@@ -3859,6 +3859,93 @@ function Get-ChannelWatermarkPath {
     return [pscustomobject]@{ Path = ''; Reason = "$($videos.Count) videos sit in the channel folder - keep one, or put 'watermark' in the name of the one to use" }
 }
 
+function Get-ChannelTitleKey {
+    # Folder "01" and title line "1" are the same video. A folder that is not a
+    # number is matched by its name instead.
+    param([string]$Name)
+    $trimmed = ([string]$Name).Trim()
+    if ($trimmed -match '^\d+$') { return ([long]$trimmed).ToString() }
+    return $trimmed.ToLowerInvariant()
+}
+
+function Get-ChannelNameKey {
+    # Channel names are compared without case, spaces or punctuation, so a
+    # heading typed as "star scope report" still finds "1. Star Scope Report".
+    # Letters of every script are kept: some channel names are Japanese,
+    # Korean or Persian.
+    param([string]$Name)
+    return (([string]$Name).ToLowerInvariant() -replace '[^\p{L}\p{N}]', '')
+}
+
+function Read-ChannelTitlesFile {
+    # titles.txt sits in the channels folder beside the channel folders and
+    # holds the day's video names, one heading per channel:
+    #
+    #   [1. Star Scope Report]
+    #   1 = First video's title
+    #   2 = Second video's title
+    #
+    # A heading is a line in square brackets, or starting with #. It may be the
+    # channel's full folder name, its number alone, or its name alone. A title
+    # line is the number of the video's folder, then = (or . ) : -), then the
+    # title. Blank lines are ignored. Anything else is reported, not guessed at.
+    param([string]$Path)
+    $bytes = [IO.File]::ReadAllBytes($Path)
+    # Notepad saves UTF-8 nowadays, but an older ANSI file would otherwise turn
+    # every curly apostrophe into junk. Strict UTF-8 refuses ANSI bytes, which
+    # is how the two are told apart.
+    try { $text = [Text.UTF8Encoding]::new($false, $true).GetString($bytes) }
+    catch { $text = [Text.Encoding]::Default.GetString($bytes) }
+    $text = $text.TrimStart([char]0xFEFF)
+    $sections = [Collections.Generic.List[object]]::new()
+    $problems = [Collections.Generic.List[string]]::new()
+    $current = $null
+    $lineNumber = 0
+    foreach ($line in ($text -split "`r?`n")) {
+        $lineNumber++
+        $trimmed = $line.Trim()
+        if ($trimmed -eq '') { continue }
+        $heading = $null
+        if ($trimmed -match '^\[(.+)\]$') { $heading = $Matches[1].Trim() }
+        elseif ($trimmed -match '^#+\s*(.+)$') { $heading = $Matches[1].Trim() }
+        if ($null -ne $heading) {
+            $current = [pscustomobject]@{ Heading = $heading; Line = $lineNumber; Titles = [ordered]@{} }
+            $sections.Add($current)
+            continue
+        }
+        if ($trimmed -notmatch '^(\d+)\s*[=.):\-]\s*(.*)$') { $problems.Add("titles.txt line $($lineNumber): not a [channel] heading or a 'number = title' line: $trimmed"); continue }
+        $key = Get-ChannelTitleKey $Matches[1]
+        $title = $Matches[2].Trim()
+        if ($null -eq $current) { $problems.Add("titles.txt line $($lineNumber): this title comes before any [channel] heading"); continue }
+        if ($title -eq '') { $problems.Add("titles.txt line $($lineNumber): video $key of [$($current.Heading)] has no title after the number"); continue }
+        if ($current.Titles.Contains($key)) { $problems.Add("titles.txt line $($lineNumber): video $key of [$($current.Heading)] is listed twice - the later title is used") }
+        $current.Titles[$key] = $title
+    }
+    return [pscustomobject]@{ Sections = $sections.ToArray(); Problems = $problems.ToArray() }
+}
+
+function Find-ChannelForTitleHeading {
+    # Returns the channel folder a titles.txt heading means, or nothing. The full
+    # folder name wins, then the name without its number, then the number alone,
+    # so "[1]", "[Star Scope Report]" and "[1. Star Scope Report]" all land on
+    # "1. Star Scope Report".
+    param([string]$Heading, [object[]]$Channels)
+    $wanted = Get-ChannelNameKey $Heading
+    $match = @($Channels | Where-Object { (Get-ChannelNameKey $_.Name) -eq $wanted })
+    if ($match.Count -eq 1) { return $match[0] }
+    $headingNumber = if ($Heading -match '^\s*(\d+)') { ([long]$Matches[1]).ToString() } else { '' }
+    $headingName = Get-ChannelNameKey ($Heading -replace '^\s*\d+\s*[.)\-:]?\s*', '')
+    if ($headingName -ne '') {
+        $match = @($Channels | Where-Object { (Get-ChannelNameKey ($_.Name -replace '^\s*\d+\s*[.)\-:]?\s*', '')) -eq $headingName })
+        if ($match.Count -eq 1) { return $match[0] }
+    }
+    if ($headingNumber -ne '') {
+        $match = @($Channels | Where-Object { $_.Name -match '^\s*(\d+)' -and ([long]$Matches[1]).ToString() -eq $headingNumber })
+        if ($match.Count -eq 1) { return $match[0] }
+    }
+    return $null
+}
+
 function Get-ChannelQueueScan {
     # Walks a folder of channel folders and pairs every numbered image folder
     # with the voiceover of the same name, which is the shape the channels are
@@ -3877,6 +3964,22 @@ function Get-ChannelQueueScan {
     $skipped = [Collections.Generic.List[string]]::new()
     $channels = @(Get-ChildItem -LiteralPath $Root -Directory -ErrorAction Stop | Sort-Object { Get-NaturalSortKey $_.Name })
     if ($channels.Count -eq 0) { throw "No channel folders were found in:`r`n$Root" }
+    # The day's video names, if titles.txt is there, keyed by channel folder and
+    # then by video folder. A heading that names no channel is reported, since
+    # its titles would otherwise vanish without a word.
+    $titlesByChannel = @{}
+    $titlesUsed = @{}
+    $titlesFile = @(Get-ChildItem -LiteralPath $Root -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -ieq 'titles.txt' }) | Select-Object -First 1
+    if ($null -ne $titlesFile) {
+        $titles = Read-ChannelTitlesFile -Path $titlesFile.FullName
+        foreach ($problem in $titles.Problems) { $skipped.Add($problem) }
+        foreach ($section in $titles.Sections) {
+            $channel = Find-ChannelForTitleHeading -Heading $section.Heading -Channels $channels
+            if ($null -eq $channel) { $skipped.Add("titles.txt line $($section.Line): no channel folder matches [$($section.Heading)]"); continue }
+            if (-not $titlesByChannel.ContainsKey($channel.FullName)) { $titlesByChannel[$channel.FullName] = @{} }
+            foreach ($key in $section.Titles.Keys) { $titlesByChannel[$channel.FullName][$key] = [string]$section.Titles[$key] }
+        }
+    }
     foreach ($channel in $channels) {
         $watermark = Get-ChannelWatermarkPath -ChannelFolder $channel.FullName
         if ([string]::IsNullOrWhiteSpace($watermark.Path)) { $skipped.Add("$($channel.Name): $($watermark.Reason)"); continue }
@@ -3906,6 +4009,12 @@ function Get-ChannelQueueScan {
             $images = @(Get-ChildItem -LiteralPath $folder.FullName -File | Where-Object { @('.jpg', '.jpeg', '.png', '.webp') -contains $_.Extension.ToLowerInvariant() })
             if ($images.Count -eq 0) { $skipped.Add("$($channel.Name) \ $($folder.Name): the folder holds no JPG, PNG or WEBP images"); continue }
             $paired[$key] = $true
+            $title = ''
+            $titleKey = Get-ChannelTitleKey $folder.Name
+            if ($titlesByChannel.ContainsKey($channel.FullName) -and $titlesByChannel[$channel.FullName].ContainsKey($titleKey)) {
+                $title = [string]$titlesByChannel[$channel.FullName][$titleKey]
+                $titlesUsed["$($channel.FullName)|$titleKey"] = $true
+            }
             $items.Add([pscustomobject]@{
                 Channel = $channel.Name
                 Label = "$($channel.Name) - $($folder.Name)"
@@ -3914,11 +4023,20 @@ function Get-ChannelQueueScan {
                 WatermarkPath = $watermark.Path
                 OutputFolder = $outputFolder
                 ImageCount = $images.Count
+                Title = $title
             })
         }
         foreach ($key in @($audioByName.Keys | Sort-Object { Get-NaturalSortKey $_ })) {
             if ($paired.ContainsKey($key)) { continue }
             $skipped.Add("$($channel.Name): $([IO.Path]::GetFileName($audioByName[$key])) has no image folder named $key")
+        }
+        # A title with no video to go on is nearly always a typo in a number or
+        # a folder that did not get copied, so it is said rather than dropped.
+        if ($titlesByChannel.ContainsKey($channel.FullName)) {
+            foreach ($key in @($titlesByChannel[$channel.FullName].Keys | Sort-Object { Get-NaturalSortKey $_ })) {
+                if ($titlesUsed.ContainsKey("$($channel.FullName)|$key")) { continue }
+                $skipped.Add("titles.txt: $($channel.Name) has a title for video $key, but no video $key was queued")
+            }
         }
     }
     return [pscustomobject]@{ Items = $items.ToArray(); Skipped = $skipped.ToArray() }
@@ -3992,7 +4110,7 @@ function Show-BulkQueueBuilder {
     <Grid Grid.Row="4" Margin="0,14,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
       <StackPanel Orientation="Horizontal">
         <Button x:Name="AddVideoButton" Content="+ Add Video" Padding="14,8" Background="#2A2119" BorderBrush="#8A5424"/>
-        <Button x:Name="ScanChannelsButton" Content="Scan Channels Folder" Padding="14,8" ToolTip="Pick the folder that holds your channel folders. Every numbered image folder with a voiceover of the same name is queued, with its own channel's watermark, ready to save into that channel's Renders folder."/>
+        <Button x:Name="ScanChannelsButton" Content="Scan Channels Folder" Padding="14,8" ToolTip="Pick the folder that holds your channel folders. Every numbered image folder with a voiceover of the same name is queued, with its own channel's watermark. A titles.txt beside the channel folders names the videos too - see the README for its layout."/>
       </StackPanel>
       <Button x:Name="SavedProjectsButton" Grid.Column="2" Content="Render Saved Projects" Padding="14,8" Margin="4,0"/>
       <Button x:Name="RenderAllButton" Grid.Column="3" Content="Render All" Padding="16,8" Margin="4,0" Background="#E0913F" BorderBrush="#E0913F" Foreground="#1C1206" FontWeight="SemiBold"/>
@@ -4028,8 +4146,8 @@ function Show-BulkQueueBuilder {
     }.GetNewClosure()
     $addRow = {
         # $Preset is one result of a channel scan: it fills every box in and ties
-        # the output to that channel's Renders folder, which leaves only the name
-        # of the video to type.
+        # the output to that channel's folder, which leaves only the name of the
+        # video to type - and titles.txt may have given that too.
         param($Preset = $null)
         $border = [Windows.Controls.Border]::new()
         $border.BorderBrush = [Windows.Media.BrushConverter]::new().ConvertFromString('#33333A')
@@ -4053,8 +4171,9 @@ function Show-BulkQueueBuilder {
             $imageBox.Text = [string]$Preset.ImageFolder
             $audioBox.Text = [string]$Preset.AudioPath
             $rowWatermarkBox.Text = [string]$Preset.WatermarkPath
-            # The folder is already there; only the name is typed after it.
-            $outputBox.Text = $outputFolder.TrimEnd('\') + '\'
+            # The folder is already there; only the name is typed after it,
+            # unless titles.txt in the channels folder already gave one.
+            $outputBox.Text = $outputFolder.TrimEnd('\') + '\' + [string]$Preset.Title
         }
         else { $rowWatermarkBox.Text = $watermarkBox.Text.Trim() }
         $outputLabel = if ($null -ne $Preset) { 'Output name' } else { 'Output MP4' }
@@ -4133,12 +4252,18 @@ function Show-BulkQueueBuilder {
             }
             foreach ($item in $found) { & $addRow $item }
             $channelCount = @($found | ForEach-Object { $_.Channel } | Sort-Object -Unique).Count
-            $summary = "Queued $($found.Count) video(s) from $channelCount channel folder(s). Type a name for each, then Render All."
+            $titled = @($found | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_.Title) }).Count
+            $summary = if ($titled -eq $found.Count) { "Queued $($found.Count) video(s) from $channelCount channel folder(s), every one named from titles.txt. Check the names, then Render All." }
+                elseif ($titled -gt 0) { "Queued $($found.Count) video(s) from $channelCount channel folder(s). titles.txt named $titled; type a name for the other $($found.Count - $titled), then Render All." }
+                else { "Queued $($found.Count) video(s) from $channelCount channel folder(s). Type a name for each, then Render All." }
             if ($ignored.Count -gt 0) { $summary = "$summary   ($($ignored.Count) skipped - hover here to see why.)" }
             $summaryBlock.Text = $summary
             $summaryBlock.ToolTip = if ($ignored.Count -gt 0) { $ignored -join "`r`n" } else { $null }
             $summaryBlock.Visibility = 'Visible'
-            if ($rows.Count -gt 0) { [void]$rows[0].OutputBox.Focus(); $rows[0].OutputBox.CaretIndex = $rows[0].OutputBox.Text.Length }
+            # The caret waits in the first box that still needs a name.
+            $firstUnnamed = @($rows | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_.OutputFolder) -and [string]::IsNullOrWhiteSpace((Resolve-QueueOutputPath -Text $_.OutputBox.Text -DefaultFolder $_.OutputFolder)) }) | Select-Object -First 1
+            if ($null -eq $firstUnnamed -and $rows.Count -gt 0) { $firstUnnamed = $rows[0] }
+            if ($null -ne $firstUnnamed) { [void]$firstUnnamed.OutputBox.Focus(); $firstUnnamed.OutputBox.CaretIndex = $firstUnnamed.OutputBox.Text.Length }
         }
         catch {
             Write-ToolDiagnostic 'Scanning the channels folder failed.' $_.Exception
