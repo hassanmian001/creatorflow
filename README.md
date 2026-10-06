@@ -167,7 +167,8 @@ then one line per video: the number of its folder, `=`, and the title.
 The heading may be the channel folder's full name, its number alone (`[1]`), or
 its name alone (`[Star Scope Report]`); case, spaces and punctuation do not
 matter. A heading may also start with `#` instead of brackets, and a title line
-may use `1.`, `1)`, `1:` or `1 -` instead of `1 =`. Blank lines are ignored. Save
+may use `1.`, `1)`, `1:` or `1 -` instead of `1 =`. Blank lines are ignored, and so
+is a line like `2 =` with no title yet: that video is left for you to type. Save
 it as UTF-8 (Notepad's default) so non-English titles come through.
 
 Every named row still shows its full path and can be edited before Render All. A

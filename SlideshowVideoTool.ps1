@@ -3888,7 +3888,9 @@ function Read-ChannelTitlesFile {
     # A heading is a line in square brackets, or starting with #. It may be the
     # channel's full folder name, its number alone, or its name alone. A title
     # line is the number of the video's folder, then = (or . ) : -), then the
-    # title. Blank lines are ignored. Anything else is reported, not guessed at.
+    # title. Blank lines are ignored, and so is a number with nothing after it:
+    # that is a template line not filled in yet, and the row is left to type.
+    # Anything else is reported, not guessed at.
     param([string]$Path)
     $bytes = [IO.File]::ReadAllBytes($Path)
     # Notepad saves UTF-8 nowadays, but an older ANSI file would otherwise turn
@@ -3917,7 +3919,7 @@ function Read-ChannelTitlesFile {
         $key = Get-ChannelTitleKey $Matches[1]
         $title = $Matches[2].Trim()
         if ($null -eq $current) { $problems.Add("titles.txt line $($lineNumber): this title comes before any [channel] heading"); continue }
-        if ($title -eq '') { $problems.Add("titles.txt line $($lineNumber): video $key of [$($current.Heading)] has no title after the number"); continue }
+        if ($title -eq '') { continue }
         if ($current.Titles.Contains($key)) { $problems.Add("titles.txt line $($lineNumber): video $key of [$($current.Heading)] is listed twice - the later title is used") }
         $current.Titles[$key] = $title
     }
