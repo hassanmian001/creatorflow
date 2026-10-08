@@ -18,8 +18,21 @@ function Get-SupportedImageFiles {
         Get-ChildItem -LiteralPath $Folder -File -ErrorAction Stop |
             Where-Object { $extensions -contains $_.Extension.ToLowerInvariant() } |
             Sort-Object FullName |
-            ForEach-Object { $_.FullName }
+            ForEach-Object { ConvertTo-ReachablePath $_.FullName }
     )
+}
+
+function ConvertTo-ReachablePath {
+    # Windows PowerShell cannot find a file whose full path is 260 characters
+    # or longer unless long paths are switched on for the whole PC: listing the
+    # folder still returns it, but Get-Item and Test-Path then say it does not
+    # exist. Images saved from a web page often have names that long. The \\?\
+    # form lifts the limit for PowerShell, .NET and FFmpeg alike, so only those
+    # paths get it and every other path stays as it was.
+    param([string]$Path)
+    if ($Path.Length -lt 260 -or $Path.StartsWith('\\?\')) { return $Path }
+    if ($Path.StartsWith('\\')) { return '\\?\UNC\' + $Path.Substring(2) }
+    return '\\?\' + $Path
 }
 
 function Get-MediaDurationSeconds {
