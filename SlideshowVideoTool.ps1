@@ -4812,7 +4812,13 @@ function New-QueueRowVisual {
     $nameBox = [Windows.Controls.TextBox]::new()
     $nameBox.Tag = [string]$Row.Id
     $nameBox.Text = [string]$Row.Name
-    $nameBox.Height = 32
+    # Sized by its text rather than fixed. A title with accents, Thai, Korean
+    # or an emoji is drawn in a fallback font with a taller line, and a fixed
+    # 32 px box cut those titles in half or scrolled them out of sight.
+    $nameBox.MinHeight = 32
+    $nameBox.Padding = [Windows.Thickness]::new(8, 4, 8, 4)
+    $nameBox.VerticalContentAlignment = 'Center'
+    [Windows.Controls.ScrollViewer]::SetVerticalScrollBarVisibility($nameBox, [Windows.Controls.ScrollBarVisibility]::Disabled)
     $nameBox.VerticalAlignment = 'Center'
     $nameBox.ToolTip = 'The video''s name. It is saved under this name in the folder shown in the panel on the right.'
     [Windows.Controls.Grid]::SetColumn($nameBox, 2)
