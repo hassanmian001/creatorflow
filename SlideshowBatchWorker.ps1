@@ -9,8 +9,15 @@ $ErrorActionPreference = 'Stop'
 $job = [IO.File]::ReadAllText($JobPath, [Text.Encoding]::UTF8) | ConvertFrom-Json
 
 function Write-BatchProgress {
-    param([double]$Percent, [string]$Message)
-    $text = "percent=$($Percent.ToString('0.0', [Globalization.CultureInfo]::InvariantCulture))`r`nmessage=$Message`r`n"
+    # Besides the batch as a whole, says which project is under way, how far
+    # into it, and whether that is its captions or its rendering, so the window
+    # can show each video's own progress and weigh the finish time by length.
+    param([double]$Percent, [string]$Message, [int]$Item = -1, [double]$ItemPercent = 0.0, [string]$Stage = '')
+    $culture = [Globalization.CultureInfo]::InvariantCulture
+    $text = "percent=$($Percent.ToString('0.0', $culture))`r`nmessage=$Message`r`n"
+    if ($Item -ge 0) {
+        $text += "item=$Item`r`nitempercent=$($ItemPercent.ToString('0.0', $culture))`r`nstage=$Stage`r`n"
+    }
     [IO.File]::WriteAllText([string]$job.ProgressPath, $text, [Text.UTF8Encoding]::new($false))
 }
 
@@ -69,7 +76,7 @@ function Invoke-ChildWorker {
     while (-not $process.HasExited) {
         $child = Read-ChildProgress $ChildProgressPath
         $overall = (($Index + ($child.Percent / 100.0)) / [double]$Count) * 100.0
-        Write-BatchProgress $overall "Project $($Index + 1) of $Count - $Label - $($child.Message)"
+        Write-BatchProgress $overall "Project $($Index + 1) of $Count - $Label - $($child.Message)" -Item $Index -ItemPercent $child.Percent -Stage $Label
         Start-Sleep -Milliseconds 500
         $process.Refresh()
     }
@@ -87,7 +94,7 @@ function Invoke-ChildWorker {
 try {
     $items = @($job.Items)
     if ($items.Count -eq 0) { throw 'The batch is empty.' }
-    Write-BatchProgress 0 "Starting batch of $($items.Count) projects..."
+    Write-BatchProgress 0 "Starting batch of $($items.Count) projects..." -Item 0 -ItemPercent 0 -Stage 'starting'
     for ($index = 0; $index -lt $items.Count; $index++) {
         $item = $items[$index]
         $title = if ($item.PSObject.Properties['DestinationPath']) { [IO.Path]::GetFileName([string]$item.DestinationPath) } else { '' }
@@ -101,7 +108,7 @@ try {
         $renderJob = [IO.File]::ReadAllText([string]$item.RenderJobPath, [Text.Encoding]::UTF8) | ConvertFrom-Json
         $renderErrorPath = if ($renderJob.PSObject.Properties['ErrorPath']) { [string]$renderJob.ErrorPath } else { '' }
         Invoke-ChildWorker -ScriptPath ([string]$job.RenderWorkerPath) -ChildJobPath ([string]$item.RenderJobPath) -ChildProgressPath ([string]$renderJob.ProgressPath) -ChildErrorPath $renderErrorPath -Index $index -Count $items.Count -Label 'rendering' -Title $title
-        Write-BatchProgress ((($index + 1) / [double]$items.Count) * 100.0) "Completed project $($index + 1) of $($items.Count)."
+        Write-BatchProgress ((($index + 1) / [double]$items.Count) * 100.0) "Completed project $($index + 1) of $($items.Count)." -Item $index -ItemPercent 100 -Stage 'done'
     }
     if (Test-Path -LiteralPath ([string]$job.ChildPidPath) -PathType Leaf) { Remove-Item -LiteralPath ([string]$job.ChildPidPath) -Force }
     Write-BatchProgress 100 "Batch completed: $($items.Count) videos."

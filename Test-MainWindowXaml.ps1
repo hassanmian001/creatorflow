@@ -84,7 +84,7 @@ foreach ($name in $declared) {
 
 # --- The secondary windows -------------------------------------------------
 
-foreach ($variable in @('editorXaml', 'historyXaml', 'queueXaml')) {
+foreach ($variable in @('editorXaml', 'historyXaml')) {
     if ($text -notmatch "(?m)^\s*\`$$variable\s*=\s*@'") { continue }
     $secondary = Get-HereString -Source $text -Name $variable
     try {

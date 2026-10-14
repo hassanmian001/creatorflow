@@ -269,6 +269,24 @@ $xaml = @'
             <Setter Property="FontSize" Value="11.5"/>
         </Style>
 
+        <!-- The Batch / Single video switch in the title bar. The code paints
+             the chosen half, the same way it paints the active caption tab. -->
+        <Style x:Key="ModeButtonStyle" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderBrush" Value="Transparent"/>
+            <Setter Property="Foreground" Value="{StaticResource DimBrush}"/>
+            <Setter Property="Margin" Value="0"/>
+            <Setter Property="Padding" Value="14,5"/>
+        </Style>
+
+        <!-- Column headings of the queue table. -->
+        <Style x:Key="ColumnHeadText" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{StaticResource MutedBrush}"/>
+            <Setter Property="FontSize" Value="10.5"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
+
         <Style TargetType="TextBox">
             <Setter Property="Background" Value="{StaticResource SunkenBrush}"/>
             <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
@@ -452,12 +470,12 @@ $xaml = @'
 
     <Grid x:Name="RootGrid">
         <Grid.RowDefinitions>
-            <RowDefinition Height="46"/>
+            <RowDefinition Height="50"/>
             <RowDefinition Height="*"/>
-            <RowDefinition Height="64"/>
+            <RowDefinition Height="66"/>
         </Grid.RowDefinitions>
         <Grid.ColumnDefinitions>
-            <ColumnDefinition x:Name="NavigationColumn" Width="218"/>
+            <ColumnDefinition x:Name="NavigationColumn" Width="230"/>
             <ColumnDefinition Width="*"/>
             <ColumnDefinition x:Name="SettingsColumn" Width="320"/>
         </Grid.ColumnDefinitions>
@@ -465,7 +483,7 @@ $xaml = @'
         <!-- TITLE BAR -->
         <Border Grid.Row="0" Grid.ColumnSpan="3" Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource LineBrush}" BorderThickness="0,0,0,1">
             <Grid Margin="14,0">
-                <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                     <!-- Source is set in code so the artwork stays a file on
                          disk rather than being pasted into the layout. -->
@@ -475,7 +493,26 @@ $xaml = @'
                     <TextBlock Text="/" Foreground="#41414A" Margin="9,0"/>
                     <TextBlock x:Name="AppSubtitleText" Text="Slideshow automation studio" Foreground="{StaticResource DimBrush}" FontSize="12.5"/>
                 </StackPanel>
-                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                <!-- Most days are a batch of thirty or more videos, so the window
+                     opens on the queue. A single video is the other half of the
+                     same switch rather than a separate window. -->
+                <Border Grid.Column="1" Margin="28,0,0,0" VerticalAlignment="Center" Background="{StaticResource SunkenBrush}"
+                        BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="7" Padding="3">
+                    <StackPanel Orientation="Horizontal">
+                        <Button x:Name="ModeBatchButton" Style="{StaticResource ModeButtonStyle}">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock x:Name="ModeBatchLabel" Text="Batch" FontSize="12.5"/>
+                                <Border Background="{StaticResource SunkenBrush}" CornerRadius="8" Padding="7,0" Margin="7,0,0,0" Height="17">
+                                    <TextBlock x:Name="BatchCountText" Text="0" FontSize="10.5" Foreground="{StaticResource DimBrush}"/>
+                                </Border>
+                            </StackPanel>
+                        </Button>
+                        <Button x:Name="ModeSingleButton" Style="{StaticResource ModeButtonStyle}" Margin="2,0,0,0">
+                            <TextBlock x:Name="ModeSingleLabel" Text="Single video" FontSize="12.5"/>
+                        </Button>
+                    </StackPanel>
+                </Border>
+                <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
                     <Border Background="{StaticResource RaisedBrush}" BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="13" Padding="10,0" Height="26" Margin="3">
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                             <Ellipse Width="6" Height="6" Fill="{StaticResource OkBrush}" Margin="0,0,7,0"/>
@@ -491,10 +528,46 @@ $xaml = @'
         <!-- WORKFLOW RAIL -->
         <Border x:Name="NavigationPanel" Grid.Row="1" Grid.Column="0" Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource LineBrush}" BorderThickness="0,0,1,0">
             <Grid>
-                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-                <TextBlock Text="WORKFLOW" Foreground="{StaticResource MutedBrush}" FontSize="10" FontWeight="Bold" Margin="17,15,0,9"/>
+                <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
 
-                <StackPanel Grid.Row="1">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <Grid>
+                <!-- Batch: the channels in the queue, then the settings every
+                     video in it shares. Each video's own files live in the
+                     inspector on the right, beside the queue. -->
+                <StackPanel x:Name="BatchRailPanel">
+                    <TextBlock Text="CHANNELS" Foreground="{StaticResource MutedBrush}" FontSize="10" FontWeight="Bold" Margin="17,15,0,9"/>
+                    <StackPanel x:Name="ChannelFilterPanel"/>
+                    <Border Height="1" Background="{StaticResource LineBrush}" Margin="17,12"/>
+                    <TextBlock Text="APPLIES TO EVERY VIDEO" Foreground="{StaticResource MutedBrush}" FontSize="10" FontWeight="Bold" Margin="17,2,0,7"/>
+                    <Button x:Name="BatchNavMotionButton" Style="{StaticResource StepButtonStyle}">
+                        <StackPanel>
+                            <TextBlock Text="Motion" FontSize="13"/>
+                            <TextBlock x:Name="BatchNavMotionSummaryText" Text="5-7s holds, 110% zoom" Foreground="{StaticResource MutedBrush}" FontSize="11" TextTrimming="CharacterEllipsis"/>
+                        </StackPanel>
+                    </Button>
+                    <Button x:Name="BatchNavCaptionsButton" Style="{StaticResource StepButtonStyle}">
+                        <StackPanel>
+                            <TextBlock Text="Captions" FontSize="13"/>
+                            <TextBlock x:Name="BatchNavCaptionsSummaryText" Text="Off" Foreground="{StaticResource MutedBrush}" FontSize="11" TextTrimming="CharacterEllipsis"/>
+                        </StackPanel>
+                    </Button>
+                    <Button x:Name="BatchNavBlankingButton" Style="{StaticResource StepButtonStyle}">
+                        <StackPanel>
+                            <TextBlock Text="Backdrop" FontSize="13"/>
+                            <TextBlock x:Name="BatchNavBlankingSummaryText" Text="Blur 40, 65% bright" Foreground="{StaticResource MutedBrush}" FontSize="11" TextTrimming="CharacterEllipsis"/>
+                        </StackPanel>
+                    </Button>
+                    <Button x:Name="BatchNavExportButton" Style="{StaticResource StepButtonStyle}">
+                        <StackPanel>
+                            <TextBlock Text="Export" FontSize="13"/>
+                            <TextBlock x:Name="BatchNavExportSummaryText" Text="YouTube quality" Foreground="{StaticResource MutedBrush}" FontSize="11" TextTrimming="CharacterEllipsis"/>
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
+
+                <StackPanel x:Name="SingleRailPanel" Visibility="Collapsed">
+                    <TextBlock Text="WORKFLOW" Foreground="{StaticResource MutedBrush}" FontSize="10" FontWeight="Bold" Margin="17,15,0,9"/>
                     <!-- The five steps are numbered because they genuinely are a
                          sequence: there is nothing to caption before a voiceover
                          is chosen, and nothing to export before either. -->
@@ -558,14 +631,12 @@ $xaml = @'
                             <TextBlock x:Name="NavExportSummaryText" Grid.Column="1" Grid.Row="1" Text="No destination chosen" Foreground="{StaticResource MutedBrush}" FontSize="11" TextTrimming="CharacterEllipsis"/>
                         </Grid>
                     </Button>
+                </StackPanel>
+                </Grid>
+                </ScrollViewer>
 
-                    <Border Height="1" Background="{StaticResource LineBrush}" Margin="17,14"/>
-
-                    <Button x:Name="BatchButton" Style="{StaticResource ToolButtonStyle}">
-                        <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                            <TextBlock Text="Batch projects" Foreground="{StaticResource MutedBrush}" FontSize="12.5"/>
-                        </Grid>
-                    </Button>
+                <StackPanel Grid.Row="1">
+                    <Border Height="1" Background="{StaticResource LineBrush}" Margin="17,10"/>
                     <Button x:Name="RenderHistoryButton" Style="{StaticResource ToolButtonStyle}">
                         <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                             <TextBlock Text="Render history" Foreground="{StaticResource MutedBrush}" FontSize="12.5"/>
@@ -578,7 +649,7 @@ $xaml = @'
                     <Button x:Name="CheckUpdatesButton" Style="{StaticResource ToolButtonStyle}" Content="Check for updates"/>
                 </StackPanel>
 
-                <StackPanel Grid.Row="2" Margin="11,0,11,12">
+                <StackPanel Grid.Row="2" Margin="11,8,11,12">
                     <Border Background="{StaticResource SunkenBrush}" BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="5" Padding="11,9">
                         <StackPanel>
                             <TextBlock Text="OUTPUT" Foreground="{StaticResource MutedBrush}" FontSize="10" FontWeight="Bold"/>
@@ -589,8 +660,119 @@ $xaml = @'
             </Grid>
         </Border>
 
-        <!-- STAGE -->
-        <Grid x:Name="PlayerPanel" Grid.Row="1" Grid.Column="1" Margin="14">
+        <!-- BATCH STAGE -->
+        <!-- The queue is the main page. It used to be a dialog that vanished
+             once Render All was pressed, while the window behind it held a
+             black player that a batch never used. -->
+        <Grid x:Name="BatchView" Grid.Row="1" Grid.Column="1" Margin="20,16,20,14">
+            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+            <Grid>
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <StackPanel VerticalAlignment="Bottom" Margin="0,0,12,0">
+                    <TextBlock x:Name="BatchHeadingText" Text="Today's queue" FontSize="20" FontWeight="SemiBold"/>
+                    <TextBlock x:Name="BatchSubheadingText" Text="Scan your channels folder to queue the day's videos." Foreground="{StaticResource DimBrush}" FontSize="12" Margin="0,3,0,0" TextTrimming="CharacterEllipsis"/>
+                </StackPanel>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Bottom">
+                    <StackPanel x:Name="QueueActionsPanel" Orientation="Horizontal">
+                        <Button x:Name="ScanChannelsButton" Content="Scan channels folder" Background="{StaticResource AccentTintBrush}" BorderBrush="{StaticResource AccentDeepBrush}"
+                                ToolTip="Pick the folder that holds your channel folders. Every numbered image folder with a voiceover of the same name is queued, with its own channel's watermark. A titles.txt beside the channel folders names the videos too - see the README for its layout."/>
+                        <Button x:Name="AddVideoButton" Content="+ Add video" ToolTip="Pick one video's image folder. A voiceover with the same name beside it is found automatically."/>
+                        <Button x:Name="SavedProjectsButton" Content="Saved projects" Style="{StaticResource QuietButtonStyle}" ToolTip="Render project files (.svp.json) saved from Single video."/>
+                        <Button x:Name="ClearFinishedButton" Content="Clear finished" Style="{StaticResource QuietButtonStyle}" Visibility="Collapsed"/>
+                    </StackPanel>
+                    <Button x:Name="ShowQueueButton" Content="Back to the queue" Style="{StaticResource QuietButtonStyle}" Visibility="Collapsed"/>
+                </StackPanel>
+            </Grid>
+
+            <StackPanel Grid.Row="1" Margin="0,14,0,0">
+                <Grid x:Name="DefaultWatermarkRow" Margin="0,0,0,10">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                    <TextBlock Text="Watermark for videos added by hand" Foreground="{StaticResource DimBrush}" FontSize="12" Margin="0,0,10,0"
+                               ToolTip="Only a starting value. Adding a video copies it into that video's own watermark, which you can change in the panel on the right. A scanned video takes the watermark from its own channel folder instead."/>
+                    <TextBox x:Name="BatchWatermarkText" Grid.Column="1"/>
+                    <Button x:Name="BrowseBatchWatermarkButton" Grid.Column="2" Content="Browse" Style="{StaticResource QuietButtonStyle}" Margin="6,0,0,0"/>
+                </Grid>
+                <Border x:Name="ScanSummaryBorder" Visibility="Collapsed" Background="{StaticResource AccentTintBrush}" BorderBrush="#5A3A1C" BorderThickness="1" CornerRadius="6" Padding="12,8" Margin="0,0,0,10">
+                    <Grid>
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                        <TextBlock x:Name="ScanSummaryText" Text="" FontSize="12.5" TextWrapping="Wrap"/>
+                        <Button x:Name="ScanSkippedButton" Grid.Column="1" Content="Skipped - why?" Style="{StaticResource QuietButtonStyle}" Foreground="{StaticResource AccentBrush}"
+                                BorderBrush="{StaticResource AccentDeepBrush}" Padding="10,4" Margin="10,0,0,0" Visibility="Collapsed"/>
+                    </Grid>
+                </Border>
+            </StackPanel>
+
+            <Border Grid.Row="2" Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="7">
+                <Grid>
+                    <!-- THE QUEUE -->
+                    <Grid x:Name="QueueTableHost">
+                        <Grid.RowDefinitions><RowDefinition Height="34"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                        <Border BorderBrush="{StaticResource LineBrush}" BorderThickness="0,0,0,1" Padding="12,0">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="30"/><ColumnDefinition Width="66"/><ColumnDefinition Width="*"/><ColumnDefinition Width="140"/>
+                                    <ColumnDefinition Width="64"/><ColumnDefinition Width="68"/><ColumnDefinition Width="142"/><ColumnDefinition Width="70"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="#" Style="{StaticResource ColumnHeadText}"/>
+                                <TextBlock Grid.Column="2" Text="VIDEO NAME" Style="{StaticResource ColumnHeadText}"/>
+                                <TextBlock Grid.Column="3" Text="CHANNEL" Style="{StaticResource ColumnHeadText}" Margin="10,0,0,0"/>
+                                <TextBlock Grid.Column="4" Text="IMAGES" Style="{StaticResource ColumnHeadText}"/>
+                                <TextBlock Grid.Column="5" Text="LENGTH" Style="{StaticResource ColumnHeadText}"/>
+                                <TextBlock Grid.Column="6" Text="STATUS" Style="{StaticResource ColumnHeadText}"/>
+                            </Grid>
+                        </Border>
+                        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                            <StackPanel x:Name="QueueRowsPanel"/>
+                        </ScrollViewer>
+                        <StackPanel x:Name="QueueEmptyPanel" Grid.Row="1" HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="420">
+                            <TextBlock Text="No videos in the queue yet" FontSize="16" FontWeight="SemiBold" HorizontalAlignment="Center"/>
+                            <TextBlock Text="Scan your channels folder to queue a whole day at once, or add one video by hand." Foreground="{StaticResource DimBrush}"
+                                       FontSize="12.5" TextWrapping="Wrap" TextAlignment="Center" Margin="0,6,0,14"/>
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                <Button x:Name="EmptyScanButton" Content="Scan channels folder" Style="{StaticResource PrimaryButtonStyle}"/>
+                                <Button x:Name="EmptyAddButton" Content="+ Add video" Style="{StaticResource QuietButtonStyle}"/>
+                            </StackPanel>
+                        </StackPanel>
+                    </Grid>
+
+                    <!-- THE BATCH WHILE IT RENDERS -->
+                    <Grid x:Name="RenderTableHost" Visibility="Collapsed">
+                        <Grid.RowDefinitions><RowDefinition Height="34"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                        <Border BorderBrush="{StaticResource LineBrush}" BorderThickness="0,0,0,1" Padding="12,0">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="30"/><ColumnDefinition Width="*"/><ColumnDefinition Width="140"/>
+                                    <ColumnDefinition Width="68"/><ColumnDefinition Width="210"/><ColumnDefinition Width="82"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="#" Style="{StaticResource ColumnHeadText}"/>
+                                <TextBlock Grid.Column="1" Text="VIDEO" Style="{StaticResource ColumnHeadText}"/>
+                                <TextBlock Grid.Column="2" Text="CHANNEL" Style="{StaticResource ColumnHeadText}" Margin="10,0,0,0"/>
+                                <TextBlock Grid.Column="3" Text="LENGTH" Style="{StaticResource ColumnHeadText}"/>
+                                <TextBlock Grid.Column="4" Text="STATUS" Style="{StaticResource ColumnHeadText}"/>
+                            </Grid>
+                        </Border>
+                        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                            <StackPanel x:Name="RenderRowsPanel"/>
+                        </ScrollViewer>
+                    </Grid>
+                </Grid>
+            </Border>
+        </Grid>
+
+        <!-- SINGLE VIDEO STAGE -->
+        <Grid x:Name="SingleView" Grid.Row="1" Grid.Column="1" Visibility="Collapsed">
+            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+            <!-- Shown while a video from the queue is open here for its preview. -->
+            <Border x:Name="QueuePreviewBanner" Visibility="Collapsed" Background="{StaticResource AccentTintBrush}" BorderBrush="#5A3A1C" BorderThickness="1"
+                    CornerRadius="6" Padding="12,7" Margin="14,14,14,0">
+                <Grid>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                    <TextBlock x:Name="QueuePreviewBannerText" Text="" FontSize="12.5" TextWrapping="Wrap"/>
+                    <Button x:Name="BackToQueueButton" Grid.Column="1" Content="Back to the queue" Style="{StaticResource QuietButtonStyle}" Padding="10,4" Margin="10,0,0,0"/>
+                </Grid>
+            </Border>
+            <Grid Grid.Row="1">
+        <Grid x:Name="PlayerPanel" Margin="14">
             <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="140"/></Grid.RowDefinitions>
 
             <Border Grid.Row="0" Background="#0A0A0C" BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="6">
@@ -666,12 +848,186 @@ $xaml = @'
             </Border>
         </Grid>
 
+        <!-- Until there is a preview to play, the stage says what is still
+             needed instead of showing an empty black player. -->
+        <Grid x:Name="SingleEmptyPanel" Margin="20,16,20,14">
+            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+            <StackPanel>
+                <TextBlock Text="Single video" FontSize="20" FontWeight="SemiBold"/>
+                <TextBlock Text="Choose the photographs, the voiceover and the overlay clip, then make a 60-second preview. The player opens here once there is something to play."
+                           Foreground="{StaticResource DimBrush}" FontSize="12" TextWrapping="Wrap" Margin="0,3,0,0"/>
+            </StackPanel>
+            <UniformGrid Grid.Row="1" Columns="3" Margin="0,16,0,0">
+                <Border x:Name="SingleTileImages" Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="7" Padding="14,12" Margin="0,0,6,0">
+                    <StackPanel>
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <Ellipse x:Name="SingleTileImagesDot" Width="7" Height="7" Fill="{StaticResource AccentBrush}" Margin="0,0,8,0"/>
+                            <TextBlock Grid.Column="1" Text="Photographs" FontSize="13" FontWeight="SemiBold"/>
+                            <Button x:Name="SingleTileImagesButton" Grid.Column="2" Content="Browse" Style="{StaticResource QuietButtonStyle}" Margin="0" Padding="10,4"/>
+                        </Grid>
+                        <TextBlock x:Name="SingleTileImagesText" Text="No folder chosen" Foreground="{StaticResource DimBrush}" FontSize="11.5" Margin="0,8,0,0" TextTrimming="CharacterEllipsis"/>
+                    </StackPanel>
+                </Border>
+                <Border x:Name="SingleTileAudio" Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="7" Padding="14,12" Margin="3,0,3,0">
+                    <StackPanel>
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <Ellipse x:Name="SingleTileAudioDot" Width="7" Height="7" Fill="{StaticResource AccentBrush}" Margin="0,0,8,0"/>
+                            <TextBlock Grid.Column="1" Text="Voiceover" FontSize="13" FontWeight="SemiBold"/>
+                            <Button x:Name="SingleTileAudioButton" Grid.Column="2" Content="Browse" Style="{StaticResource QuietButtonStyle}" Margin="0" Padding="10,4"/>
+                        </Grid>
+                        <TextBlock x:Name="SingleTileAudioText" Text="No voiceover chosen" Foreground="{StaticResource DimBrush}" FontSize="11.5" Margin="0,8,0,0" TextTrimming="CharacterEllipsis"/>
+                    </StackPanel>
+                </Border>
+                <Border x:Name="SingleTileWatermark" Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="7" Padding="14,12" Margin="6,0,0,0">
+                    <StackPanel>
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <Ellipse x:Name="SingleTileWatermarkDot" Width="7" Height="7" Fill="{StaticResource AccentBrush}" Margin="0,0,8,0"/>
+                            <TextBlock Grid.Column="1" Text="Overlay clip" FontSize="13" FontWeight="SemiBold"/>
+                            <Button x:Name="SingleTileWatermarkButton" Grid.Column="2" Content="Browse" Style="{StaticResource QuietButtonStyle}" Margin="0" Padding="10,4"/>
+                        </Grid>
+                        <TextBlock x:Name="SingleTileWatermarkText" Text="No overlay chosen" Foreground="{StaticResource DimBrush}" FontSize="11.5" Margin="0,8,0,0" TextTrimming="CharacterEllipsis"/>
+                    </StackPanel>
+                </Border>
+            </UniformGrid>
+            <Grid Grid.Row="2" Margin="0,14,0,0">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="300"/></Grid.ColumnDefinitions>
+                <Grid Margin="0,0,12,0">
+                    <Rectangle Stroke="{StaticResource StrongLineBrush}" StrokeThickness="1" StrokeDashArray="5 4" RadiusX="7" RadiusY="7" Fill="{StaticResource PanelBrush}"/>
+                    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="380" Margin="20">
+                        <Path Data="M2,6 L34,6 L34,28 L2,28 Z M14,11 L14,23 L24,17 Z" Stroke="#6E6E6A" StrokeThickness="1.4" HorizontalAlignment="Center"/>
+                        <TextBlock Text="No preview yet" FontSize="15" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,12,0,0"/>
+                        <TextBlock x:Name="SingleEmptyHintText" Text="Once the three sources are chosen, Preview 60s renders the first minute and opens it here with the storyboard."
+                                   Foreground="{StaticResource DimBrush}" FontSize="12.5" TextWrapping="Wrap" TextAlignment="Center" Margin="0,6,0,14"/>
+                        <Button x:Name="EmptyPreviewButton" Content="Preview 60s" Style="{StaticResource PrimaryButtonStyle}" HorizontalAlignment="Center" MinWidth="120"/>
+                    </StackPanel>
+                </Grid>
+                <Border Grid.Column="1" Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="7" Padding="14,12">
+                    <Grid>
+                        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                        <TextBlock Text="RECENT SINGLE VIDEOS" Foreground="{StaticResource MutedBrush}" FontSize="10" FontWeight="Bold"/>
+                        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Margin="0,8,0,0">
+                            <StackPanel>
+                                <StackPanel x:Name="RecentSinglePanel"/>
+                                <TextBlock x:Name="RecentSingleEmptyText" Text="Finished single videos appear here. Click one to show it in its folder." Style="{StaticResource NoteText}"/>
+                            </StackPanel>
+                        </ScrollViewer>
+                    </Grid>
+                </Border>
+            </Grid>
+        </Grid>
+            </Grid>
+        </Grid>
+
+        <!-- BATCH INSPECTOR -->
+        <!-- The selected video's own files, and while a batch runs, the video
+             being rendered. The shared settings open in the settings panel
+             beside it, from the left rail. -->
+        <Border x:Name="BatchInspectorPanel" Grid.Row="1" Grid.Column="2" Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource LineBrush}" BorderThickness="1,0,0,0">
+            <Grid>
+                <ScrollViewer x:Name="SelectedVideoView" VerticalScrollBarVisibility="Auto" Visibility="Collapsed">
+                    <StackPanel Margin="16,16,16,20">
+                        <TextBlock Text="SELECTED VIDEO" Foreground="{StaticResource MutedBrush}" FontSize="10" FontWeight="Bold"/>
+                        <TextBlock x:Name="SelectedTitleText" Text="" FontSize="15" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,6,0,10"/>
+                        <Border Height="162" Background="#2E2E34" BorderBrush="#3A3A42" BorderThickness="1" CornerRadius="5" ClipToBounds="True">
+                            <Grid>
+                                <TextBlock x:Name="SelectedThumbHint" Text="First image of the folder" Foreground="{StaticResource MutedBrush}" FontSize="11.5" HorizontalAlignment="Center"/>
+                                <Image x:Name="SelectedThumbImage" Stretch="UniformToFill" RenderOptions.BitmapScalingMode="HighQuality"/>
+                            </Grid>
+                        </Border>
+                        <Grid Margin="0,10,0,0">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <Button x:Name="SelectedPreviewButton" Content="Preview 60s" Margin="0,0,3,0" ToolTip="Opens this video in Single video and renders its first minute in the player."/>
+                            <Button x:Name="SelectedCaptionsButton" Grid.Column="1" Content="Edit captions" Style="{StaticResource QuietButtonStyle}" Margin="3,0,0,0"/>
+                        </Grid>
+                        <TextBlock x:Name="SelectedCaptionStatusText" Text="" Style="{StaticResource NoteText}" Margin="1,8,0,0"/>
+
+                        <TextBlock Text="Video name" Style="{StaticResource LabelText}" Margin="0,16,0,5"/>
+                        <TextBox x:Name="SelectedNameText"/>
+                        <TextBlock x:Name="SelectedSavesAsText" Text="" Style="{StaticResource NoteText}" Margin="1,6,0,0"/>
+
+                        <TextBlock Text="Save in folder" Style="{StaticResource LabelText}" Margin="0,14,0,5"/>
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <TextBox x:Name="SelectedOutputFolderText"/>
+                            <Button x:Name="SelectedOutputBrowseButton" Grid.Column="1" Content="Browse" Style="{StaticResource QuietButtonStyle}" Margin="6,0,0,0"/>
+                        </Grid>
+
+                        <TextBlock Text="Photographs" Style="{StaticResource LabelText}" Margin="0,14,0,5"/>
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <TextBox x:Name="SelectedImagesText"/>
+                            <Button x:Name="SelectedImagesBrowseButton" Grid.Column="1" Content="Browse" Style="{StaticResource QuietButtonStyle}" Margin="6,0,0,0"/>
+                        </Grid>
+
+                        <TextBlock Text="Voiceover" Style="{StaticResource LabelText}" Margin="0,14,0,5"/>
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <TextBox x:Name="SelectedAudioText"/>
+                            <Button x:Name="SelectedAudioBrowseButton" Grid.Column="1" Content="Browse" Style="{StaticResource QuietButtonStyle}" Margin="6,0,0,0"/>
+                        </Grid>
+
+                        <TextBlock Text="Watermark" Style="{StaticResource LabelText}" Margin="0,14,0,5"/>
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <TextBox x:Name="SelectedWatermarkText"/>
+                            <Button x:Name="SelectedWatermarkBrowseButton" Grid.Column="1" Content="Browse" Style="{StaticResource QuietButtonStyle}" Margin="6,0,0,0"/>
+                        </Grid>
+
+                        <Button x:Name="SelectedRemoveButton" Content="Remove from the queue" Style="{StaticResource DangerButtonStyle}" HorizontalAlignment="Left" Margin="0,18,0,0"/>
+                        <Border BorderBrush="{StaticResource StrongLineBrush}" BorderThickness="2,0,0,0" Padding="11,2" Margin="1,18,0,0">
+                            <TextBlock Text="Motion, captions, backdrop and export quality are set once, from the left rail, and apply to every video in the queue." Style="{StaticResource NoteText}"/>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+
+                <StackPanel x:Name="NoSelectionView" VerticalAlignment="Center" Margin="24">
+                    <TextBlock Text="No video selected" FontSize="14" FontWeight="SemiBold" HorizontalAlignment="Center"/>
+                    <TextBlock Text="Select a video in the queue to see and change its files here." Foreground="{StaticResource DimBrush}" FontSize="12" TextWrapping="Wrap" TextAlignment="Center" Margin="0,6,0,0"/>
+                </StackPanel>
+
+                <ScrollViewer x:Name="NowRenderingView" VerticalScrollBarVisibility="Auto" Visibility="Collapsed">
+                    <StackPanel Margin="16,16,16,20">
+                        <TextBlock x:Name="NowRenderingLabel" Text="NOW RENDERING" Foreground="{StaticResource MutedBrush}" FontSize="10" FontWeight="Bold"/>
+                        <TextBlock x:Name="NowRenderingTitleText" Text="" FontSize="15" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,6,0,10"/>
+                        <Border Height="162" Background="#2E2E34" BorderBrush="#3A3A42" BorderThickness="1" CornerRadius="5" ClipToBounds="True">
+                            <Grid>
+                                <TextBlock x:Name="NowRenderingImageHint" Text="The latest finished stretch appears here" Foreground="{StaticResource MutedBrush}" FontSize="11.5" HorizontalAlignment="Center"/>
+                                <Image x:Name="NowRenderingImage" Stretch="UniformToFill" RenderOptions.BitmapScalingMode="HighQuality"/>
+                            </Grid>
+                        </Border>
+                        <UniformGrid Columns="2" Margin="0,10,0,0">
+                            <Border Background="{StaticResource SunkenBrush}" BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="5" Padding="11,8" Margin="0,0,4,8">
+                                <StackPanel><TextBlock Text="Speed" Foreground="{StaticResource MutedBrush}" FontSize="11"/><TextBlock x:Name="NowSpeedText" Text="-" FontSize="15" FontWeight="SemiBold" Margin="0,2,0,0"/></StackPanel>
+                            </Border>
+                            <Border Background="{StaticResource SunkenBrush}" BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="5" Padding="11,8" Margin="4,0,0,8">
+                                <StackPanel><TextBlock Text="This video" Foreground="{StaticResource MutedBrush}" FontSize="11"/><TextBlock x:Name="NowVideoPercentText" Text="-" FontSize="15" FontWeight="SemiBold" Margin="0,2,0,0"/></StackPanel>
+                            </Border>
+                            <Border Background="{StaticResource SunkenBrush}" BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="5" Padding="11,8" Margin="0,0,4,0">
+                                <StackPanel><TextBlock Text="Elapsed" Foreground="{StaticResource MutedBrush}" FontSize="11"/><TextBlock x:Name="NowElapsedText" Text="-" FontSize="15" FontWeight="SemiBold" Margin="0,2,0,0"/></StackPanel>
+                            </Border>
+                            <Border Background="{StaticResource SunkenBrush}" BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="5" Padding="11,8" Margin="4,0,0,0">
+                                <StackPanel><TextBlock Text="Encoder" Foreground="{StaticResource MutedBrush}" FontSize="11"/><TextBlock x:Name="NowEncoderText" Text="-" FontSize="15" FontWeight="SemiBold" Margin="0,2,0,0" TextTrimming="CharacterEllipsis"/></StackPanel>
+                            </Border>
+                        </UniformGrid>
+                        <TextBlock x:Name="NowRenderingStageText" Text="" Style="{StaticResource NoteText}" Margin="1,12,0,0"/>
+                    </StackPanel>
+                </ScrollViewer>
+            </Grid>
+        </Border>
+
         <!-- INSPECTOR -->
         <Border x:Name="SettingsPanel" Grid.Row="1" Grid.Column="2" Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource LineBrush}" BorderThickness="1,0,0,0">
             <Grid>
                 <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
                 <Border Grid.Row="0" Padding="15,13,15,12" BorderBrush="{StaticResource LineBrush}" BorderThickness="0,0,0,1">
                     <StackPanel>
+                        <!-- Batch only: these settings cover the whole queue, and
+                             this returns to the video that was selected. -->
+                        <Button x:Name="SettingsBackButton" Content="Back to the selected video" Style="{StaticResource QuietButtonStyle}"
+                                HorizontalAlignment="Left" Padding="10,4" Margin="0,0,0,10" Visibility="Collapsed"/>
                         <TextBlock x:Name="SectionTitleText" Text="Source" FontSize="14" FontWeight="SemiBold"/>
                         <TextBlock x:Name="SectionHintText" Text="The photographs, the voiceover, and the overlay clip." Foreground="{StaticResource MutedBrush}" FontSize="11.5" TextWrapping="Wrap" Margin="0,3,0,0"/>
                     </StackPanel>
@@ -770,12 +1126,16 @@ $xaml = @'
                             </ComboBox>
                             <TextBlock x:Name="CaptionPresetHelpText" Text="White semibold text, centered safely above the bottom." Style="{StaticResource NoteText}" Margin="1,7,0,0"/>
 
-                            <Grid Margin="0,14,0,0">
-                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                                <Button x:Name="GenerateCaptionsButton" Content="Generate" Margin="0,0,3,0"/>
-                                <Button x:Name="EditCaptionsButton" Grid.Column="1" Content="Edit text" Style="{StaticResource QuietButtonStyle}" Margin="3,0,0,0"/>
-                            </Grid>
-                            <TextBlock x:Name="CaptionStatusText" Text="Select a voiceover; captions are generated on this computer." Style="{StaticResource NoteText}" Margin="1,8,0,0"/>
+                            <StackPanel x:Name="SingleOnlyCaptionPanel">
+                                <Grid Margin="0,14,0,0">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                    <Button x:Name="GenerateCaptionsButton" Content="Generate" Margin="0,0,3,0"/>
+                                    <Button x:Name="EditCaptionsButton" Grid.Column="1" Content="Edit text" Style="{StaticResource QuietButtonStyle}" Margin="3,0,0,0"/>
+                                </Grid>
+                                <TextBlock x:Name="CaptionStatusText" Text="Select a voiceover; captions are generated on this computer." Style="{StaticResource NoteText}" Margin="1,8,0,0"/>
+                            </StackPanel>
+                            <TextBlock x:Name="BatchCaptionNoteText" Visibility="Collapsed" Style="{StaticResource NoteText}" Margin="1,12,0,0"
+                                       Text="Each video's captions come from its own voiceover and are generated during the batch if they are not ready. To check or correct one first, select it in the queue and choose Edit captions."/>
 
                             <TextBlock Text="Fine tuning" Style="{StaticResource LabelText}" Margin="0,18,0,5"/>
                             <Border BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="5" Background="{StaticResource SunkenBrush}">
@@ -884,15 +1244,19 @@ $xaml = @'
                             <Grid Margin="0,9"><Grid.ColumnDefinitions><ColumnDefinition Width="104"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                                 <TextBlock Text="Format" Style="{StaticResource RowLabel}"/>
                                 <TextBlock Grid.Column="1" Text="1080p  H.264  24 fps" Foreground="{StaticResource DimBrush}" FontFamily="Consolas" FontSize="11.5"/></Grid>
-                            <Grid Margin="0,3"><Grid.ColumnDefinitions><ColumnDefinition Width="104"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                                <TextBlock Text="Estimated size" Style="{StaticResource RowLabel}"/>
-                                <TextBlock x:Name="EstimateText" Grid.Column="1" Text="Scan voiceover first" Foreground="{StaticResource AccentBrush}" FontSize="12"/></Grid>
-                            <TextBlock Text="Save to" Style="{StaticResource LabelText}" Margin="0,16,0,5"/>
-                            <Grid>
-                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                                <TextBox x:Name="OutputText"/>
-                                <Button x:Name="BrowseOutputButton" Grid.Column="1" Content="Save as" Style="{StaticResource QuietButtonStyle}" Margin="6,0,0,0"/>
-                            </Grid>
+                            <StackPanel x:Name="SingleOnlyExportPanel">
+                                <Grid Margin="0,3"><Grid.ColumnDefinitions><ColumnDefinition Width="104"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                    <TextBlock Text="Estimated size" Style="{StaticResource RowLabel}"/>
+                                    <TextBlock x:Name="EstimateText" Grid.Column="1" Text="Scan voiceover first" Foreground="{StaticResource AccentBrush}" FontSize="12"/></Grid>
+                                <TextBlock Text="Save to" Style="{StaticResource LabelText}" Margin="0,16,0,5"/>
+                                <Grid>
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <TextBox x:Name="OutputText"/>
+                                    <Button x:Name="BrowseOutputButton" Grid.Column="1" Content="Save as" Style="{StaticResource QuietButtonStyle}" Margin="6,0,0,0"/>
+                                </Grid>
+                            </StackPanel>
+                            <TextBlock x:Name="BatchExportNoteText" Visibility="Collapsed" Style="{StaticResource NoteText}" Margin="1,12,0,0"
+                                       Text="Each video is saved under its own name in its own folder, shown in the panel beside the queue. The time and size of the whole batch are estimated at the bottom of the window."/>
                         </StackPanel>
 
                     </Grid>
@@ -916,11 +1280,21 @@ $xaml = @'
                     <ProgressBar x:Name="RenderProgress" Height="5" Minimum="0" Maximum="100" Value="0" Margin="0,8,0,0"/>
                     <TextBlock x:Name="RenderDetailText" Text="" Foreground="{StaticResource MutedBrush}" FontSize="10.5" Margin="0,5,0,0"/>
                 </StackPanel>
-                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                <StackPanel x:Name="SingleFooterButtons" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Visibility="Collapsed">
                     <Button x:Name="PreviewButton" Content="Preview 60s" Style="{StaticResource QuietButtonStyle}" MinWidth="104"/>
                     <Button x:Name="FinalButton" Content="Render final" Style="{StaticResource PrimaryButtonStyle}" MinWidth="122" IsEnabled="False"/>
                     <Button x:Name="CancelButton" Content="Cancel" Style="{StaticResource DangerButtonStyle}" IsEnabled="False"/>
                     <Button x:Name="OpenFolderButton" Content="Open folder" Style="{StaticResource QuietButtonStyle}" IsEnabled="False"/>
+                </StackPanel>
+                <StackPanel x:Name="BatchFooterButtons" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock x:Name="BatchEstimateText" Text="" Foreground="{StaticResource DimBrush}" FontFamily="Consolas" FontSize="11.5" Margin="0,0,14,0"
+                               ToolTip="Estimated from the voiceover lengths and this computer's measured render speed. It settles once a batch has been rendered here."/>
+                    <Button x:Name="RenderAllButton" Content="Render all" Style="{StaticResource PrimaryButtonStyle}" MinWidth="122"/>
+                    <!-- Pausing keeps every finished video and every finished
+                         stretch of the one in progress; Resume carries on from there. -->
+                    <Button x:Name="BatchPauseButton" Content="Pause" Style="{StaticResource DangerButtonStyle}" MinWidth="80" Visibility="Collapsed"/>
+                    <Button x:Name="BatchResumeButton" Content="Resume" Style="{StaticResource PrimaryButtonStyle}" MinWidth="100" Visibility="Collapsed"/>
+                    <Button x:Name="BatchOpenFolderButton" Content="Open output folder" Style="{StaticResource QuietButtonStyle}" IsEnabled="False"/>
                 </StackPanel>
             </Grid>
         </Border>
@@ -941,8 +1315,34 @@ $window.Add_SourceInitialized({
 
 $controlNames = @(
     'RootGrid', 'NavigationColumn', 'NavigationPanel', 'SettingsColumn', 'SettingsPanel', 'PlayerPanel', 'StatusPanel',
-    'EncoderText', 'OpenProjectButton', 'SaveProjectButton', 'BatchButton', 'RenderHistoryButton',
+    'EncoderText', 'OpenProjectButton', 'SaveProjectButton', 'RenderHistoryButton',
     'CheckUpdatesButton', 'AppSubtitleText',
+    # Batch and Single video are two halves of one window.
+    'ModeBatchButton', 'ModeBatchLabel', 'BatchCountText', 'ModeSingleButton', 'ModeSingleLabel',
+    'BatchView', 'SingleView', 'BatchRailPanel', 'SingleRailPanel', 'BatchInspectorPanel',
+    'SingleFooterButtons', 'BatchFooterButtons', 'SingleOnlyExportPanel', 'BatchExportNoteText',
+    'SingleOnlyCaptionPanel', 'BatchCaptionNoteText', 'SettingsBackButton',
+    # The queue.
+    'ChannelFilterPanel', 'BatchNavMotionButton', 'BatchNavCaptionsButton', 'BatchNavBlankingButton', 'BatchNavExportButton',
+    'BatchNavMotionSummaryText', 'BatchNavCaptionsSummaryText', 'BatchNavBlankingSummaryText', 'BatchNavExportSummaryText',
+    'BatchHeadingText', 'BatchSubheadingText', 'QueueActionsPanel', 'ScanChannelsButton', 'AddVideoButton', 'SavedProjectsButton',
+    'ClearFinishedButton', 'ShowQueueButton', 'DefaultWatermarkRow', 'BatchWatermarkText', 'BrowseBatchWatermarkButton',
+    'ScanSummaryBorder', 'ScanSummaryText', 'ScanSkippedButton', 'QueueTableHost', 'QueueRowsPanel', 'QueueEmptyPanel',
+    'EmptyScanButton', 'EmptyAddButton', 'RenderTableHost', 'RenderRowsPanel',
+    'BatchEstimateText', 'RenderAllButton', 'BatchPauseButton', 'BatchResumeButton', 'BatchOpenFolderButton',
+    # The selected video, and the one being rendered.
+    'SelectedVideoView', 'NoSelectionView', 'SelectedTitleText', 'SelectedThumbHint', 'SelectedThumbImage',
+    'SelectedPreviewButton', 'SelectedCaptionsButton', 'SelectedCaptionStatusText', 'SelectedNameText', 'SelectedSavesAsText',
+    'SelectedOutputFolderText', 'SelectedOutputBrowseButton', 'SelectedImagesText', 'SelectedImagesBrowseButton',
+    'SelectedAudioText', 'SelectedAudioBrowseButton', 'SelectedWatermarkText', 'SelectedWatermarkBrowseButton', 'SelectedRemoveButton',
+    'NowRenderingView', 'NowRenderingLabel', 'NowRenderingTitleText', 'NowRenderingImageHint', 'NowRenderingImage',
+    'NowSpeedText', 'NowVideoPercentText', 'NowElapsedText', 'NowEncoderText', 'NowRenderingStageText',
+    # Single video before there is a preview to play.
+    'QueuePreviewBanner', 'QueuePreviewBannerText', 'BackToQueueButton', 'SingleEmptyPanel', 'SingleEmptyHintText', 'EmptyPreviewButton',
+    'SingleTileImagesDot', 'SingleTileImagesText', 'SingleTileImagesButton',
+    'SingleTileAudioDot', 'SingleTileAudioText', 'SingleTileAudioButton',
+    'SingleTileWatermarkDot', 'SingleTileWatermarkText', 'SingleTileWatermarkButton',
+    'RecentSinglePanel', 'RecentSingleEmptyText',
     'MotionQualityCombo', 'CrossfadeCheckBox', 'CrossfadeSecondsText', 'CrossfadeDurationRow',
     'NavMediaButton', 'NavMotionButton', 'NavCaptionsButton', 'NavBlankingButton', 'NavExportButton',
     'SectionTitleText', 'SectionHintText',
@@ -1049,6 +1449,15 @@ $script:MutedBrush = New-ToolBrush '#7E7E7A'
 $script:StrongLineBrush = New-ToolBrush '#41414A'
 $script:StepBadgeInk = New-ToolBrush '#1C1206'
 $script:TransparentBrush = [Windows.Media.Brushes]::Transparent
+$script:RaisedBrush = New-ToolBrush '#26262B'
+$script:SunkenBrush = New-ToolBrush '#101012'
+$script:LineBrush = New-ToolBrush '#33333A'
+$script:RowLineBrush = New-ToolBrush '#2A2A30'
+$script:ThumbFillBrush = New-ToolBrush '#2E2E34'
+$script:BadBrush = New-ToolBrush '#D88A82'
+$script:BadTintBrush = New-ToolBrush '#2E1F1E'
+$script:OkTextBrush = New-ToolBrush '#8FBF8F'
+$script:RenderingRowBrush = New-ToolBrush '#211C17'
 
 function Set-StepComplete {
     # A step reports itself done with a tick and a green badge, or unfinished
@@ -1102,6 +1511,9 @@ function Set-ActiveSection {
     param([Parameter(Mandatory = $true)][string]$Name)
     if (-not $script:SettingsSections.Contains($Name)) { return }
     $script:ActiveSection = $Name
+    # Batch opens the shared sections here too; Single video returns to the
+    # section it was last on, not to whichever one the batch rail opened.
+    if ($script:AppMode -eq 'Single') { $script:SingleActiveSection = $Name }
     foreach ($key in $script:SettingsSections.Keys) {
         $entry = $script:SettingsSections[$key]
         $isActive = ($key -eq $Name)
@@ -1168,6 +1580,29 @@ $script:OriginalWindowState = $window.WindowState
 $script:OriginalWindowStyle = $window.WindowStyle
 $script:OriginalSettingsWidth = $SettingsColumn.Width
 $script:OriginalNavigationWidth = $NavigationColumn.Width
+
+# The batch queue. It lives in the main window now, so it is kept on disk as
+# well: closing the tool no longer throws away a morning of typed names.
+$script:AppMode = 'Batch'
+$script:SingleActiveSection = 'Media'
+$script:QueueRows = [Collections.Generic.List[object]]::new()
+$script:QueueStatePath = Join-Path $script:DataRoot 'queue.json'
+$script:SelectedQueueRowId = ''
+$script:ChannelFilter = '*'
+$script:LastScanSkipped = @()
+$script:BatchSettingsSection = ''
+$script:QueuePreviewRowId = ''
+$script:IsFillingInspector = $false
+$script:ThumbnailRequests = [Collections.Generic.Queue[string]]::new()
+$script:DurationProbe = $null
+$script:PendingCaptionEditorAudio = ''
+# The batch currently shown in place of the queue: its videos, and whether it
+# is still running. Null while the queue itself is shown.
+$script:BatchRun = $null
+$script:NowRenderingThumb = $null
+# Measured render speed, in seconds of video per second of rendering, per
+# motion quality. Used to estimate how long a batch will take.
+$script:RenderSpeeds = @{}
 
 function Show-ErrorMessage {
     param([string]$Message, [string]$Title = 'Slideshow Video Tool')
@@ -1538,7 +1973,7 @@ function Get-UiSettings {
     $crossfade = [bool]$CrossfadeCheckBox.IsChecked
     $crossfadeSeconds = 0.0
     if ($crossfade) {
-        if (-not [double]::TryParse($CrossfadeSecondsText.Text.Trim(), [Globalization.NumberStyles]::Float, $script:InvariantCulture, [ref]$crossfadeSeconds)) {
+        if (-not [double]::TryParse($CrossfadeSecondsText.Text.Trim(), [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$crossfadeSeconds)) {
             throw 'Dissolve length must be a number of seconds such as 0.5.'
         }
         if ($crossfadeSeconds -lt 0.1 -or $crossfadeSeconds -gt 2.0) {
@@ -1589,6 +2024,8 @@ function Save-UserSettings {
         $settings | Add-Member -NotePropertyName LastAudioPath -NotePropertyValue $AudioText.Text
         $settings | Add-Member -NotePropertyName LastWatermarkPath -NotePropertyValue $WatermarkText.Text
         $settings | Add-Member -NotePropertyName LastChannelsRoot -NotePropertyValue $script:LastChannelsRoot
+        $settings | Add-Member -NotePropertyName LastBatchWatermarkPath -NotePropertyValue $BatchWatermarkText.Text
+        $settings | Add-Member -NotePropertyName RenderSpeeds -NotePropertyValue ([pscustomobject]$script:RenderSpeeds)
         $json = $settings | ConvertTo-Json -Depth 4
         [IO.File]::WriteAllText($script:SettingsPath, $json, [Text.UTF8Encoding]::new($false))
     }
@@ -1642,6 +2079,16 @@ function Load-UserSettings {
         if ($null -ne $settings.LastAudioPath) { $AudioText.Text = [string]$settings.LastAudioPath }
         if ($null -ne $settings.LastWatermarkPath) { $WatermarkText.Text = [string]$settings.LastWatermarkPath }
         if ($null -ne $settings.PSObject.Properties['LastChannelsRoot']) { $script:LastChannelsRoot = [string]$settings.LastChannelsRoot }
+        if ($null -ne $settings.PSObject.Properties['LastBatchWatermarkPath']) { $BatchWatermarkText.Text = [string]$settings.LastBatchWatermarkPath }
+        elseif ($null -ne $settings.LastWatermarkPath) { $BatchWatermarkText.Text = [string]$settings.LastWatermarkPath }
+        if ($null -ne $settings.PSObject.Properties['RenderSpeeds'] -and $null -ne $settings.RenderSpeeds) {
+            foreach ($property in $settings.RenderSpeeds.PSObject.Properties) {
+                $speed = 0.0
+                if ([double]::TryParse([string]$property.Value, [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$speed) -and $speed -gt 0) {
+                    $script:RenderSpeeds[[string]$property.Name] = $speed
+                }
+            }
+        }
     }
     catch {
         $StatusText.Text = 'Saved settings could not be loaded; defaults are being used.'
@@ -2369,6 +2816,18 @@ function Update-WorkflowState {
 
     $hasImages = ([int]$summaries.ImageCount -gt 0)
     $hasAudio = [bool]$summaries.AudioReady
+    # The same three answers on the tiles that stand in for the player until
+    # there is a preview.
+    $SingleTileImagesText.Text = [string]$summaries.ImageText
+    $SingleTileAudioText.Text = [string]$summaries.AudioText
+    $SingleTileWatermarkText.Text = [string]$summaries.WatermarkText
+    $SingleTileImagesDot.Fill = if ($hasImages) { $script:OkBrush } else { $script:AccentBrush }
+    $SingleTileAudioDot.Fill = if ($hasAudio) { $script:OkBrush } else { $script:AccentBrush }
+    $SingleTileWatermarkDot.Fill = if ([bool]$summaries.WatermarkReady) { $script:OkBrush } else { $script:AccentBrush }
+    $SingleEmptyHintText.Text = if ($hasImages -and $hasAudio -and [bool]$summaries.WatermarkReady) {
+        'Everything is chosen. Preview 60s renders the first minute and opens it here with the storyboard.'
+    }
+    else { 'Once the three sources are chosen, Preview 60s renders the first minute and opens it here with the storyboard.' }
     if ($hasImages -and $hasAudio) {
         $sourceSummary = "$($summaries.ImageCount) photos, $(Format-Clock $script:AudioDurationSeconds) voiceover"
         if ($script:AudioDurationSeconds -le 0) { $sourceSummary = "$($summaries.ImageCount) photos, voiceover ready" }
@@ -2399,6 +2858,19 @@ function Update-WorkflowState {
     $hasOutput = -not [string]::IsNullOrWhiteSpace($output)
     $exportSummary = if ($hasOutput) { "$(Get-ComboText $QualityCombo), $(Split-Path -Leaf $output)" } else { 'No destination chosen' }
     Set-StepComplete -Name 'Export' -Complete $hasOutput -Summary $exportSummary
+
+    # The batch rail shows the same shared settings. Captions there speak for
+    # the whole queue, so they say the mode and look rather than whether one
+    # voiceover's captions happen to exist.
+    $BatchNavMotionSummaryText.Text = $motionSummary
+    $BatchNavCaptionsSummaryText.Text = if ($captionMode -eq 'Off') { 'Off' } else { "$captionMode, $((Get-ComboText $CaptionPresetCombo) -replace '^\d+\.\s*', '')" }
+    $BatchNavBlankingSummaryText.Text = "Blur $([int]$BlurSlider.Value), $([int]$BrightnessSlider.Value)% bright"
+    $BatchNavExportSummaryText.Text = "$(Get-ComboText $QualityCombo) quality, $(Get-ComboText $MotionQualityCombo) motion"
+
+    if ($script:AppMode -eq 'Batch') {
+        Update-BatchFooter
+        return
+    }
 
     # The footer says what is still missing rather than presenting a disabled
     # button with no explanation.
@@ -2765,9 +3237,13 @@ function Join-ProcessArguments {
 function Set-RenderControls {
     param([bool]$Rendering)
     $PreviewButton.IsEnabled = -not $Rendering
+    $EmptyPreviewButton.IsEnabled = -not $Rendering
     $OpenProjectButton.IsEnabled = -not $Rendering
     $SaveProjectButton.IsEnabled = -not $Rendering
-    $BatchButton.IsEnabled = -not $Rendering
+    foreach ($control in @($ScanChannelsButton, $AddVideoButton, $SavedProjectsButton, $ClearFinishedButton, $EmptyScanButton, $EmptyAddButton,
+            $RenderAllButton, $BatchResumeButton, $SelectedPreviewButton, $SelectedCaptionsButton, $SelectedRemoveButton)) {
+        $control.IsEnabled = -not $Rendering
+    }
     $GenerateCaptionsButton.IsEnabled = -not $Rendering
     $EditCaptionsButton.IsEnabled = -not $Rendering
     $CancelButton.IsEnabled = $Rendering
@@ -2797,6 +3273,10 @@ function Set-RenderControls {
         if ($null -ne $RenderDetailText) { $RenderDetailText.Text = '' }
         Update-WorkflowState
     }
+    Update-QueueEditing
+    Update-SingleView
+    Update-BatchInspector
+    Update-BatchFooter
 }
 
 function Stop-PreviewPlayback {
@@ -2835,20 +3315,26 @@ function Remove-CaptionRunDirectory {
 }
 
 function Start-CaptionGeneration {
-    param([bool]$Force = $false)
+    # Without -AudioPath this captions the Single video voiceover. A queued
+    # video passes its own voiceover, which leaves the Single video captions
+    # and the player overlay alone.
+    param([bool]$Force = $false, [string]$AudioPath = '')
     try {
         Assert-FFmpegAvailable
-        $audioPath = $AudioText.Text.Trim()
+        $audioPath = if ([string]::IsNullOrWhiteSpace($AudioPath)) { $AudioText.Text.Trim() } else { $AudioPath.Trim() }
+        $isSingleVoiceover = [string]::Equals($audioPath, $AudioText.Text.Trim(), [StringComparison]::OrdinalIgnoreCase)
         if (-not (Test-VoiceoverFile $audioPath)) {
             throw 'Select a valid voiceover file before generating captions.'
         }
         $outputSrt = Get-CaptionCachePath -AudioPath $audioPath -DataRoot $script:DataRoot
         if (-not $Force -and (Test-Path -LiteralPath $outputSrt -PathType Leaf)) {
-            $script:CaptionPath = $outputSrt
-            $script:LiveCaptionCacheSignature = ''
-            Refresh-LiveCaptionEntries
-            Update-LiveCaptionText
-            $CaptionStatusText.Text = 'Automatic captions are ready.'
+            if ($isSingleVoiceover) {
+                $script:CaptionPath = $outputSrt
+                $script:LiveCaptionCacheSignature = ''
+                Refresh-LiveCaptionEntries
+                Update-LiveCaptionText
+                $CaptionStatusText.Text = 'Automatic captions are ready.'
+            }
             return $true
         }
 
@@ -2875,12 +3361,14 @@ function Start-CaptionGeneration {
             ProgressPath = $progressPath
             ErrorPath = $errorPath
             OutputSrt = $outputSrt
+            AudioPath = $audioPath
+            IsSingleVoiceover = $isSingleVoiceover
             DurationSeconds = 1.0
             Encoder = 'offline whisper.cpp'
         }
         $RenderProgress.Value = 0
         $StatusText.Text = 'Starting automatic caption generation...'
-        $CaptionStatusText.Text = 'Preparing offline caption engine...'
+        if ($isSingleVoiceover) { $CaptionStatusText.Text = 'Preparing offline caption engine...' }
         Set-RenderControls $true
         $script:RenderProcess = Start-Process -FilePath 'powershell.exe' -ArgumentList $argumentLine -PassThru -WindowStyle Hidden
         Write-ToolDiagnostic "Caption generation started. PID=$($script:RenderProcess.Id)"
@@ -2892,6 +3380,7 @@ function Start-CaptionGeneration {
         if ($null -ne $script:RenderState) { Remove-CaptionRunDirectory $script:RenderState.RunDirectory }
         $script:RenderProcess = $null
         $script:RenderState = $null
+        $script:PendingCaptionEditorAudio = ''
         Set-RenderControls $false
         Show-ErrorMessage $_.Exception.Message 'Could not generate captions'
         return $false
@@ -2903,13 +3392,19 @@ function Complete-CaptionGeneration {
     $process = $script:RenderProcess
     $pendingKind = $script:PendingRenderAfterCaptions
     $script:PendingRenderAfterCaptions = $null
+    # A queued video's Edit captions waits for its captions to exist, then
+    # opens the editor on them.
+    $pendingEditorAudio = [string]$script:PendingCaptionEditorAudio
+    $script:PendingCaptionEditorAudio = ''
+    $isSingleVoiceover = ($null -eq $state) -or -not $state.PSObject.Properties['IsSingleVoiceover'] -or [bool]$state.IsSingleVoiceover
     try {
         $renderTimer.Stop()
         $process.WaitForExit()
         $process.Refresh()
         if ($script:CancelRequested) {
             $StatusText.Text = 'Caption generation cancelled.'
-            $CaptionStatusText.Text = 'Captions were not changed.'
+            if ($isSingleVoiceover) { $CaptionStatusText.Text = 'Captions were not changed.' }
+            $pendingEditorAudio = ''
             return
         }
         if ($process.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $state.OutputSrt -PathType Leaf)) {
@@ -2920,20 +3415,23 @@ function Complete-CaptionGeneration {
             }
             throw $message
         }
-        $script:CaptionPath = $state.OutputSrt
-        $script:LiveCaptionCacheSignature = ''
-        Refresh-LiveCaptionEntries
-        Update-LiveCaptionText
+        if ($isSingleVoiceover) {
+            $script:CaptionPath = $state.OutputSrt
+            $script:LiveCaptionCacheSignature = ''
+            Refresh-LiveCaptionEntries
+            Update-LiveCaptionText
+            $CaptionStatusText.Text = 'Automatic captions are ready.'
+        }
         $RenderProgress.Value = 100
-        $CaptionStatusText.Text = 'Automatic captions are ready.'
         $StatusText.Text = 'Automatic captions are ready and cached for this voiceover.'
         Write-ToolDiagnostic "Caption generation completed at $($state.OutputSrt)"
     }
     catch {
         Write-ToolDiagnostic 'Caption generation failed.' $_.Exception
         Show-ErrorMessage $_.Exception.Message 'Caption generation failed'
-        $CaptionStatusText.Text = 'Caption generation failed; see the diagnostic log.'
+        if ($isSingleVoiceover) { $CaptionStatusText.Text = 'Caption generation failed; see the diagnostic log.' }
         $pendingKind = $null
+        $pendingEditorAudio = ''
     }
     finally {
         if ($null -ne $state) { Remove-CaptionRunDirectory $state.RunDirectory }
@@ -2943,6 +3441,9 @@ function Complete-CaptionGeneration {
     }
     if ($pendingKind) {
         Start-VideoRender $pendingKind
+    }
+    elseif (-not [string]::IsNullOrWhiteSpace($pendingEditorAudio)) {
+        Show-CaptionEditor -AudioPath $pendingEditorAudio
     }
 }
 
@@ -3171,8 +3672,13 @@ function Save-SrtEntries {
 }
 
 function Show-CaptionEditor {
+    # -AudioPath edits a queued video's captions. The live overlay on the player
+    # only follows along when that voiceover is also the one in Single video,
+    # because otherwise the player is showing a different video.
+    param([string]$AudioPath = '')
     try {
-        $audioPath = $AudioText.Text.Trim()
+        $audioPath = if ([string]::IsNullOrWhiteSpace($AudioPath)) { $AudioText.Text.Trim() } else { $AudioPath.Trim() }
+        $isSingleVoiceover = [string]::Equals($audioPath, $AudioText.Text.Trim(), [StringComparison]::OrdinalIgnoreCase)
         if (-not (Test-Path -LiteralPath $audioPath -PathType Leaf)) { throw 'Select a voiceover first.' }
         $captionPath = Get-CaptionCachePath -AudioPath $audioPath -DataRoot $script:DataRoot
         if (-not (Test-Path -LiteralPath $captionPath -PathType Leaf)) {
@@ -3243,14 +3749,17 @@ function Show-CaptionEditor {
         $editorStatus = $editor.FindName('EditorStatus')
         $script:CaptionEditorSaved = $false
         $script:CaptionEditorOpen = $true
-        $script:LiveCaptionOverrideEntries = $entries
+        if ($isSingleVoiceover) { $script:LiveCaptionOverrideEntries = $entries }
         $editorLiveTimer = [Windows.Threading.DispatcherTimer]::new()
         $editorLiveTimer.Interval = [TimeSpan]::FromMilliseconds(120)
         $editorLiveTimer.Add_Tick({
-                $script:LiveCaptionOverrideEntries = $entries
-                Update-LiveCaptionText
+                if ($isSingleVoiceover) {
+                    $script:LiveCaptionOverrideEntries = $entries
+                    Update-LiveCaptionText
+                }
             })
         $editorLiveTimer.Start()
+        if (-not $isSingleVoiceover) { $editor.Title = "Caption Editor - $([IO.Path]::GetFileName($audioPath))" }
 
         $editor.Add_SourceInitialized({
                 try { $handle = [Windows.Interop.WindowInteropHelper]::new($editor).Handle; $enabled = 1; [void][CreatorFlowWindowTheme]::DwmSetWindowAttribute($handle, 20, [ref]$enabled, 4) } catch {}
@@ -3278,7 +3787,7 @@ function Show-CaptionEditor {
                     $entry = $entries[$selectedIndex]
                     $start = ConvertFrom-SrtTimestamp ([string]$entry.Start)
                     $end = ConvertFrom-SrtTimestamp ([string]$entry.End)
-                    $split = $PreviewMedia.Position
+                    $split = if ($isSingleVoiceover) { $PreviewMedia.Position } else { [TimeSpan]::Zero }
                     if ($split -le $start.Add([TimeSpan]::FromMilliseconds(150)) -or $split -ge $end.Subtract([TimeSpan]::FromMilliseconds(150))) {
                         $split = $start.Add([TimeSpan]::FromTicks([int64](($end - $start).Ticks / 2)))
                     }
@@ -3330,7 +3839,8 @@ function Show-CaptionEditor {
                 if ($null -eq $grid.SelectedItem) { $editorStatus.Text = 'Select a caption first.'; return }
                 try {
                     $time = ConvertFrom-SrtTimestamp ([string]$grid.SelectedItem.Start)
-                    if ($null -ne $PreviewMedia.Source) {
+                    if (-not $isSingleVoiceover) { $editorStatus.Text = 'The player shows a different video. Preview this one from the queue to hear its captions.' }
+                    elseif ($null -ne $PreviewMedia.Source) {
                         $PreviewMedia.Position = $time
                         $PreviewMedia.Play()
                         $PlayPauseButton.Content = 'Pause'
@@ -3359,12 +3869,15 @@ function Show-CaptionEditor {
         $previousPreviewEnabled = $PreviewButton.IsEnabled
         $previousFinalEnabled = $FinalButton.IsEnabled
         $previousGenerateEnabled = $GenerateCaptionsButton.IsEnabled
-        $previousBatchEnabled = $BatchButton.IsEnabled
+        # Nothing may render, or open a second editor, while captions are
+        # half edited.
+        $lockedWhileEditing = @($RenderAllButton, $BatchResumeButton, $SelectedCaptionsButton, $SelectedPreviewButton, $EmptyPreviewButton)
+        $previousLockedEnabled = @($lockedWhileEditing | ForEach-Object { [bool]$_.IsEnabled })
+        foreach ($control in $lockedWhileEditing) { $control.IsEnabled = $false }
         $EditCaptionsButton.IsEnabled = $false
         $PreviewButton.IsEnabled = $false
         $FinalButton.IsEnabled = $false
         $GenerateCaptionsButton.IsEnabled = $false
-        $BatchButton.IsEnabled = $false
         $editor.Add_Closed({
                 $editorLiveTimer.Stop()
                 $editorFrame.Continue = $false
@@ -3376,18 +3889,21 @@ function Show-CaptionEditor {
         $PreviewButton.IsEnabled = $previousPreviewEnabled
         $FinalButton.IsEnabled = $previousFinalEnabled
         $GenerateCaptionsButton.IsEnabled = $previousGenerateEnabled
-        $BatchButton.IsEnabled = $previousBatchEnabled
+        for ($index = 0; $index -lt $lockedWhileEditing.Count; $index++) { $lockedWhileEditing[$index].IsEnabled = $previousLockedEnabled[$index] }
         $script:LiveCaptionOverrideEntries = $null
         $script:LiveCaptionCacheSignature = ''
         Refresh-LiveCaptionEntries
         Update-LiveCaptionText
         if ($script:CaptionEditorSaved) {
-            $script:CaptionPath = $captionPath
-            $CaptionStatusText.Text = "Captions edited and saved ($($entries.Count) entries)."
-            if ((Get-ComboText $CaptionModeCombo) -in @('SRT only', 'Burned + SRT') -and $script:FinalOutputPath -and (Test-Path -LiteralPath $script:FinalOutputPath -PathType Leaf)) {
-                [void](Copy-SrtWithWordWrapping -SourcePath $captionPath -DestinationPath ([IO.Path]::ChangeExtension($script:FinalOutputPath, '.srt')) -MaxWordsPerLine ([int][Math]::Round($CaptionWordsPerLineSlider.Value)))
+            if ($isSingleVoiceover) {
+                $script:CaptionPath = $captionPath
+                $CaptionStatusText.Text = "Captions edited and saved ($($entries.Count) entries)."
+                if ((Get-ComboText $CaptionModeCombo) -in @('SRT only', 'Burned + SRT') -and $script:FinalOutputPath -and (Test-Path -LiteralPath $script:FinalOutputPath -PathType Leaf)) {
+                    [void](Copy-SrtWithWordWrapping -SourcePath $captionPath -DestinationPath ([IO.Path]::ChangeExtension($script:FinalOutputPath, '.srt')) -MaxWordsPerLine ([int][Math]::Round($CaptionWordsPerLineSlider.Value)))
+                }
             }
             $StatusText.Text = 'Caption changes saved.'
+            Update-BatchInspector
         }
     }
     catch { Show-ErrorMessage $_.Exception.Message 'Caption editor' }
@@ -4044,297 +4560,1543 @@ function Get-ChannelQueueScan {
     return [pscustomobject]@{ Items = $items.ToArray(); Skipped = $skipped.ToArray() }
 }
 
-function Show-BulkQueueBuilder {
-    # A queue item carries its own image folder, voiceover, watermark and
-    # output, so one batch can mix videos that do not share a watermark. The
-    # Motion and Caption settings are still taken once from the main window.
-    #
-    # The box at the top is only a starting value: it fills the watermark of
-    # each new row as it is added, which keeps the common case - one watermark
-    # across the whole batch - to a single browse. What actually renders is
-    # always the row's own value, and every row must have one.
-    $queueXaml = @'
-<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Build render queue" Width="960" Height="700" MinWidth="760" MinHeight="520" WindowStartupLocation="CenterOwner"
-        Background="#17171A" Foreground="#E9E9E6" FontFamily="Segoe UI">
-  <Window.Resources>
-    <!-- This window builds most of its controls in code, so these carry no key:
-         an implicit style reaches the boxes and buttons added later too. Without
-         them the text boxes were stock white on a dark window. -->
-    <Style TargetType="TextBlock"><Setter Property="Foreground" Value="#E9E9E6"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
-    <Style TargetType="TextBox">
-      <Setter Property="Background" Value="#101012"/><Setter Property="Foreground" Value="#E9E9E6"/>
-      <Setter Property="CaretBrush" Value="#E0913F"/><Setter Property="SelectionBrush" Value="#8A5424"/>
-      <Setter Property="BorderBrush" Value="#33333A"/><Setter Property="BorderThickness" Value="1"/>
-      <Setter Property="Padding" Value="8,6"/><Setter Property="FontSize" Value="12.5"/>
-      <Setter Property="Template">
-        <Setter.Value>
-          <ControlTemplate TargetType="TextBox">
-            <Border x:Name="TB" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
-                    BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="4">
-              <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}" VerticalAlignment="Center"/>
-            </Border>
-            <ControlTemplate.Triggers>
-              <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="TB" Property="BorderBrush" Value="#E0913F"/></Trigger>
-            </ControlTemplate.Triggers>
-          </ControlTemplate>
-        </Setter.Value>
-      </Setter>
-    </Style>
-    <Style TargetType="Button">
-      <Setter Property="Background" Value="#26262B"/><Setter Property="Foreground" Value="#E9E9E6"/>
-      <Setter Property="BorderBrush" Value="#41414A"/><Setter Property="BorderThickness" Value="1"/>
-      <Setter Property="Padding" Value="13,7"/><Setter Property="Margin" Value="3"/>
-      <Setter Property="FontSize" Value="12.5"/><Setter Property="Cursor" Value="Hand"/>
-      <Setter Property="Template">
-        <Setter.Value>
-          <ControlTemplate TargetType="Button">
-            <Border x:Name="B" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
-                    BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="5" Padding="{TemplateBinding Padding}">
-              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-            </Border>
-            <ControlTemplate.Triggers>
-              <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="B" Property="Opacity" Value="0.84"/></Trigger>
-              <Trigger Property="IsEnabled" Value="False"><Setter TargetName="B" Property="Opacity" Value="0.45"/></Trigger>
-            </ControlTemplate.Triggers>
-          </ControlTemplate>
-        </Setter.Value>
-      </Setter>
-    </Style>
-  </Window.Resources>
-  <Grid Margin="18"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-    <TextBlock Text="Add videos one by one, or scan a channels folder to queue a whole day at once." FontSize="17" FontWeight="SemiBold"/>
-    <Grid Grid.Row="1" Margin="0,14,0,12"><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-      <TextBlock Text="Watermark to start each new video with" VerticalAlignment="Center" Foreground="#A3A39E" ToolTip="This is only a starting value. Adding a video copies it into that video's own Watermark box, where you can change it. What renders is always the video's own watermark. A scanned video takes the watermark from its own channel folder instead."/><TextBox x:Name="WatermarkText" Grid.Column="1" Margin="8,0"/><Button x:Name="BrowseWatermarkButton" Grid.Column="2" Content="Browse" Padding="12,6"/>
-    </Grid>
-    <TextBlock x:Name="ScanSummaryText" Grid.Row="2" Visibility="Collapsed" Foreground="#E0913F" FontSize="12.5" TextWrapping="Wrap" Margin="0,0,0,10"/>
-    <ScrollViewer Grid.Row="3" VerticalScrollBarVisibility="Auto"><StackPanel x:Name="RowsPanel"/></ScrollViewer>
-    <Grid Grid.Row="4" Margin="0,14,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-      <StackPanel Orientation="Horizontal">
-        <Button x:Name="AddVideoButton" Content="+ Add Video" Padding="14,8" Background="#2A2119" BorderBrush="#8A5424"/>
-        <Button x:Name="ScanChannelsButton" Content="Scan Channels Folder" Padding="14,8" ToolTip="Pick the folder that holds your channel folders. Every numbered image folder with a voiceover of the same name is queued, with its own channel's watermark. A titles.txt beside the channel folders names the videos too - see the README for its layout."/>
-      </StackPanel>
-      <Button x:Name="SavedProjectsButton" Grid.Column="2" Content="Render Saved Projects" Padding="14,8" Margin="4,0"/>
-      <Button x:Name="RenderAllButton" Grid.Column="3" Content="Render All" Padding="16,8" Margin="4,0" Background="#E0913F" BorderBrush="#E0913F" Foreground="#1C1206" FontWeight="SemiBold"/>
-    </Grid>
-  </Grid>
-</Window>
-'@
-    $reader = [Xml.XmlNodeReader]::new([xml]$queueXaml)
-    $dialog = [Windows.Markup.XamlReader]::Load($reader)
-    $dialog.Owner = $window
-    Set-WindowIcon -Target $dialog
-    $watermarkBox = $dialog.FindName('WatermarkText')
-    $watermarkBox.Text = $WatermarkText.Text.Trim()
-    $rowsPanel = $dialog.FindName('RowsPanel')
-    $summaryBlock = $dialog.FindName('ScanSummaryText')
-    $mutedBrush = [Windows.Media.BrushConverter]::new().ConvertFromString('#A3A39E')
-    # A closure runs inside a dynamic module of its own, where $script: reaches
-    # that module rather than this file: reading one there comes back empty and
-    # writing one there is lost. So the voiceover filter is copied in as a local,
-    # and the remembered channels root travels on an object the handler can
-    # change and this function can read back once the dialog has closed.
-    $voiceoverFilter = [string]$script:VoiceoverFilter
-    $scanState = [pscustomobject]@{ LastRoot = [string]$script:LastChannelsRoot }
-    $rows = [Collections.Generic.List[object]]::new()
-    # A hand-added row is known by its position, so everything that adds or
-    # removes one calls this afterwards. A scanned row is known by the channel
-    # and folder it came from instead, which no renumbering can disturb.
-    $renumberRows = {
-        for ($position = 0; $position -lt $rows.Count; $position++) {
-            $entry = $rows[$position]
-            $entry.TitleBlock.Text = if ([string]::IsNullOrWhiteSpace([string]$entry.BaseTitle)) { "Video $($position + 1)" } else { [string]$entry.BaseTitle }
-        }
-    }.GetNewClosure()
-    $addRow = {
-        # $Preset is one result of a channel scan: it fills every box in and ties
-        # the output to that channel's folder, which leaves only the name of the
-        # video to type - and titles.txt may have given that too.
-        param($Preset = $null)
-        $border = [Windows.Controls.Border]::new()
-        $border.BorderBrush = [Windows.Media.BrushConverter]::new().ConvertFromString('#33333A')
-        $border.BorderThickness = [Windows.Thickness]::new(1)
-        $border.CornerRadius = [Windows.CornerRadius]::new(5)
-        $border.Padding = [Windows.Thickness]::new(10)
-        $border.Margin = [Windows.Thickness]::new(0, 0, 0, 9)
-        $panel = [Windows.Controls.StackPanel]::new(); $border.Child = $panel
-        $header = [Windows.Controls.Grid]::new()
-        $header.ColumnDefinitions.Add([Windows.Controls.ColumnDefinition]::new())
-        $autoColumn = [Windows.Controls.ColumnDefinition]::new(); $autoColumn.Width = [Windows.GridLength]::Auto; $header.ColumnDefinitions.Add($autoColumn)
-        $title = [Windows.Controls.TextBlock]::new(); $title.FontWeight = 'SemiBold'; $title.FontSize = 14
-        $remove = [Windows.Controls.Button]::new(); $remove.Content = 'Remove'; $remove.Padding = [Windows.Thickness]::new(10,4,10,4)
-        [Windows.Controls.Grid]::SetColumn($remove, 1); [void]$header.Children.Add($title); [void]$header.Children.Add($remove); [void]$panel.Children.Add($header)
-        $imageBox = [Windows.Controls.TextBox]::new(); $audioBox = [Windows.Controls.TextBox]::new(); $outputBox = [Windows.Controls.TextBox]::new()
-        $rowWatermarkBox = [Windows.Controls.TextBox]::new()
-        $baseTitle = ''; $outputFolder = ''
-        if ($null -ne $Preset) {
-            $baseTitle = [string]$Preset.Label
-            $outputFolder = [string]$Preset.OutputFolder
-            $imageBox.Text = [string]$Preset.ImageFolder
-            $audioBox.Text = [string]$Preset.AudioPath
-            $rowWatermarkBox.Text = [string]$Preset.WatermarkPath
-            # The folder is already there; only the name is typed after it,
-            # unless titles.txt in the channels folder already gave one.
-            $outputBox.Text = $outputFolder.TrimEnd('\') + '\' + [string]$Preset.Title
-        }
-        else { $rowWatermarkBox.Text = $watermarkBox.Text.Trim() }
-        $outputLabel = if ($null -ne $Preset) { 'Output name' } else { 'Output MP4' }
-        # A local, so the Browse closure below can capture it.
-        $audioFilter = $voiceoverFilter
-        foreach ($definition in @(@('Images folder', $imageBox, 'Folder'), @('Voiceover', $audioBox, 'Audio'), @('Watermark', $rowWatermarkBox, 'Watermark'), @($outputLabel, $outputBox, 'Output'))) {
-            $grid = [Windows.Controls.Grid]::new(); $grid.Margin = [Windows.Thickness]::new(0,6,0,0)
-            $labelColumn = [Windows.Controls.ColumnDefinition]::new(); $labelColumn.Width = [Windows.GridLength]::new(120); $grid.ColumnDefinitions.Add($labelColumn)
-            $grid.ColumnDefinitions.Add([Windows.Controls.ColumnDefinition]::new())
-            $browseColumn = [Windows.Controls.ColumnDefinition]::new(); $browseColumn.Width = [Windows.GridLength]::Auto; $grid.ColumnDefinitions.Add($browseColumn)
-            $label = [Windows.Controls.TextBlock]::new(); $label.Text = $definition[0]; $label.Foreground = [Windows.Media.BrushConverter]::new().ConvertFromString('#B9C1D0'); $label.VerticalAlignment = 'Center'
-            $box = $definition[1]; [Windows.Controls.Grid]::SetColumn($box,1); $box.Margin = [Windows.Thickness]::new(8,0,8,0)
-            $browse = [Windows.Controls.Button]::new(); $browse.Content = 'Browse'; $browse.Padding = [Windows.Thickness]::new(10,4,10,4); [Windows.Controls.Grid]::SetColumn($browse,2)
-            [void]$grid.Children.Add($label); [void]$grid.Children.Add($box); [void]$grid.Children.Add($browse); [void]$panel.Children.Add($grid)
-            if ($definition[2] -eq 'Folder') { $browse.Add_Click(({ $picked = Select-Folder -Description 'Select images folder'; if ($picked) { $box.Text = $picked } }).GetNewClosure()) }
-            elseif ($definition[2] -eq 'Audio') { $browse.Add_Click(({ $picked = Select-OpenFile -Title 'Select voiceover' -Filter $audioFilter; if ($picked) { $box.Text = $picked } }).GetNewClosure()) }
-            elseif ($definition[2] -eq 'Watermark') { $browse.Add_Click(({ $picked = Select-OpenFile -Title 'Select watermark video' -Filter 'Video files (*.mov;*.mp4)|*.mov;*.mp4'; if ($picked) { $box.Text = $picked } }).GetNewClosure()) }
-            else { $browse.Add_Click(({ $picked = Select-SaveFile -Title 'Choose output MP4' -Filter 'MP4 video (*.mp4)|*.mp4' -DefaultExtension '.mp4'; if ($picked) { $box.Text = $picked } }).GetNewClosure()) }
-        }
-        if ($null -ne $Preset) {
-            # The row says which file the box will write, and keeps saying it as
-            # the name is typed.
-            $hint = [Windows.Controls.TextBlock]::new()
-            $hint.Foreground = $mutedBrush; $hint.FontSize = 11; $hint.TextWrapping = 'Wrap'
-            $hint.Margin = [Windows.Thickness]::new(128, 4, 0, 0)
-            [void]$panel.Children.Add($hint)
-            $hintBlock = $hint; $hintBox = $outputBox; $hintFolder = $outputFolder; $hintImages = [int]$Preset.ImageCount
-            $updateHint = ({
-                $target = Resolve-QueueOutputPath -Text $hintBox.Text -DefaultFolder $hintFolder
-                $hintBlock.Text = if ([string]::IsNullOrWhiteSpace($target)) { "$hintImages images. Type the video's name after the folder." } else { "$hintImages images. Saves as $target" }
-            }).GetNewClosure()
-            & $updateHint
-            $outputBox.Add_TextChanged($updateHint)
-            # Tabbing in lands after the folder, where the name goes. A click
-            # still puts the caret wherever it was clicked.
-            $outputBox.Add_GotKeyboardFocus({ $this.CaretIndex = $this.Text.Length })
-        }
-        $row = [pscustomobject]@{ Border=$border; ImageBox=$imageBox; AudioBox=$audioBox; OutputBox=$outputBox; WatermarkBox=$rowWatermarkBox; TitleBlock=$title; BaseTitle=$baseTitle; OutputFolder=$outputFolder }
-        # GetNewClosure copies the variables of the scope it is called in, and that
-        # scope here is one invocation of $addRow - not the closure $addRow itself
-        # carries. Reading $rows or $rowsPanel straight from the click handler
-        # therefore found nothing, the null method call was swallowed by WPF, and
-        # Remove looked dead. Copying them into locals first puts them where the
-        # handler's own closure can capture them.
-        $rowList = $rows; $rowsHost = $rowsPanel; $renumber = $renumberRows
-        $remove.Add_Click(({
-            [void]$rowList.Remove($row)
-            [void]$rowsHost.Children.Remove($border)
-            & $renumber
-        }).GetNewClosure())
-        $rows.Add($row); [void]$rowsPanel.Children.Add($border)
-        & $renumberRows
-    }.GetNewClosure()
-    $dialog.FindName('BrowseWatermarkButton').Add_Click({ $picked = Select-OpenFile -Title 'Select watermark video' -Filter 'Video files (*.mov;*.mp4)|*.mov;*.mp4'; if ($picked) { $watermarkBox.Text = $picked } }.GetNewClosure())
-    $dialog.FindName('AddVideoButton').Add_Click({ & $addRow }.GetNewClosure())
-    $dialog.FindName('ScanChannelsButton').Add_Click({
-        try {
-            $picked = Select-Folder -Description 'Select the folder that holds your channel folders' -InitialPath $scanState.LastRoot
-            if ([string]::IsNullOrWhiteSpace($picked)) { return }
-            $scan = Get-ChannelQueueScan -Root $picked
-            $found = @($scan.Items); $ignored = @($scan.Skipped)
-            if ($found.Count -eq 0) {
-                $summaryBlock.Text = "Nothing could be queued from $picked."
-                $summaryBlock.ToolTip = $null
-                $summaryBlock.Visibility = 'Visible'
-                Show-ErrorMessage ("Nothing in that folder could be queued:`r`n$picked`r`n`r`n" + ((@($ignored) | Select-Object -First 25) -join "`r`n")) 'Nothing to queue'
-                return
-            }
-            $scanState.LastRoot = $picked
-            # A scan replaces the blank starter row instead of queueing it as an
-            # empty video that would only fail when Render All checks it.
-            foreach ($existing in @($rows)) {
-                if (($existing.ImageBox.Text.Trim() -eq '') -and ($existing.AudioBox.Text.Trim() -eq '') -and ($existing.OutputBox.Text.Trim() -eq '')) {
-                    [void]$rows.Remove($existing); [void]$rowsPanel.Children.Remove($existing.Border)
-                }
-            }
-            foreach ($item in $found) { & $addRow $item }
-            $channelCount = @($found | ForEach-Object { $_.Channel } | Sort-Object -Unique).Count
-            $titled = @($found | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_.Title) }).Count
-            $summary = if ($titled -eq $found.Count) { "Queued $($found.Count) video(s) from $channelCount channel folder(s), every one named from titles.txt. Check the names, then Render All." }
-                elseif ($titled -gt 0) { "Queued $($found.Count) video(s) from $channelCount channel folder(s). titles.txt named $titled; type a name for the other $($found.Count - $titled), then Render All." }
-                else { "Queued $($found.Count) video(s) from $channelCount channel folder(s). Type a name for each, then Render All." }
-            if ($ignored.Count -gt 0) { $summary = "$summary   ($($ignored.Count) skipped - hover here to see why.)" }
-            $summaryBlock.Text = $summary
-            $summaryBlock.ToolTip = if ($ignored.Count -gt 0) { $ignored -join "`r`n" } else { $null }
-            $summaryBlock.Visibility = 'Visible'
-            # The caret waits in the first box that still needs a name.
-            $firstUnnamed = @($rows | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_.OutputFolder) -and [string]::IsNullOrWhiteSpace((Resolve-QueueOutputPath -Text $_.OutputBox.Text -DefaultFolder $_.OutputFolder)) }) | Select-Object -First 1
-            if ($null -eq $firstUnnamed -and $rows.Count -gt 0) { $firstUnnamed = $rows[0] }
-            if ($null -ne $firstUnnamed) { [void]$firstUnnamed.OutputBox.Focus(); $firstUnnamed.OutputBox.CaretIndex = $firstUnnamed.OutputBox.Text.Length }
-        }
-        catch {
-            Write-ToolDiagnostic 'Scanning the channels folder failed.' $_.Exception
-            Show-ErrorMessage $_.Exception.Message 'Could not scan channels'
-        }
-    }.GetNewClosure())
-    $dialog.FindName('SavedProjectsButton').Add_Click({ $dialog.Tag = 'saved'; $dialog.Close() }.GetNewClosure())
-    $dialog.FindName('RenderAllButton').Add_Click({ $dialog.Tag = 'render'; $dialog.Close() }.GetNewClosure())
-    & $addRow
-    [void]$dialog.ShowDialog()
-    $script:LastChannelsRoot = [string]$scanState.LastRoot
-    if ($dialog.Tag -eq 'saved') { Start-BatchRender; return }
-    if ($dialog.Tag -ne 'render') { return }
+# --- The batch queue --------------------------------------------------------
+#
+# The queue is the main page of the window. Each video in it carries its own
+# image folder, voiceover, watermark and output, so one batch can mix channels
+# that do not share a watermark. Motion, captions, backdrop and export quality
+# are set once in the shared settings and apply to every video.
+#
+# Event handlers made here are plain script blocks rather than closures. They
+# run at the window's own scope, where every function and control in this file
+# can be reached, and they find their video through the Tag of the control that
+# raised them. A closure would have needed its variables copied in one by one,
+# which is what made Remove look dead in the old queue window.
 
+function Test-JobActive {
+    # True from the moment a preview, render, batch or caption job is set up
+    # until it has been wrapped up. The render process itself starts a moment
+    # after the controls are locked, so asking only about the process would
+    # leave the queue editable for that moment.
+    return ($null -ne $script:RenderState) -or ($null -ne $script:RenderProcess -and -not $script:RenderProcess.HasExited)
+}
+
+function ConvertTo-Visibility {
+    param([bool]$Visible)
+    if ($Visible) { return [Windows.Visibility]::Visible }
+    return [Windows.Visibility]::Collapsed
+}
+
+function New-QueueRow {
+    # Every property exists from the start: strict mode turns reading one that
+    # was never set into an error.
+    param(
+        [string]$Channel = '', [string]$Label = '', [string]$ImageFolder = '', [string]$AudioPath = '',
+        [string]$WatermarkPath = '', [string]$OutputFolder = '', [string]$Name = '', [int]$ImageCount = -1
+    )
+    return [pscustomobject]@{
+        Id = [guid]::NewGuid().ToString('N')
+        Channel = $Channel
+        Label = $Label
+        ImageFolder = $ImageFolder
+        AudioPath = $AudioPath
+        WatermarkPath = $WatermarkPath
+        OutputFolder = $OutputFolder
+        Name = $Name
+        ImageCount = $ImageCount
+        ImagesOk = $false
+        AudioOk = $false
+        WatermarkOk = $false
+        Duration = 0.0
+        DurationProbed = $false
+        Done = $false
+        DoneOutput = ''
+        # The timeline a preview of this video was made with, so the batch can
+        # render exactly what was approved instead of a fresh shuffle.
+        PreviewPlan = $null
+        PreviewPlanSignature = ''
+        Problem = ''
+        ProblemKind = ''
+        Visual = $null
+    }
+}
+
+function Get-QueueRow {
+    param([string]$Id)
+    if ([string]::IsNullOrWhiteSpace($Id)) { return $null }
+    foreach ($row in $script:QueueRows) { if ([string]$row.Id -eq $Id) { return $row } }
+    return $null
+}
+
+function Get-SelectedQueueRow {
+    return Get-QueueRow -Id $script:SelectedQueueRowId
+}
+
+function Get-QueueRowNumber {
+    param([psobject]$Row)
+    return $script:QueueRows.IndexOf($Row) + 1
+}
+
+function Get-QueueRowTitle {
+    param([psobject]$Row)
+    $name = ([string]$Row.Name).Trim()
+    if ($name -ne '') { return $name }
+    if (-not [string]::IsNullOrWhiteSpace([string]$Row.Label)) { return "Untitled ($($Row.Label))" }
+    return 'Untitled video'
+}
+
+function Get-QueueRowChannelKey {
+    param([psobject]$Row)
+    if ([string]::IsNullOrWhiteSpace([string]$Row.Channel)) { return '#hand' }
+    return [string]$Row.Channel
+}
+
+function Get-QueueRowOutputPath {
+    # The name is typed on its own and saved in the row's folder. A name typed
+    # with a folder in front of it goes to that folder instead.
+    param([psobject]$Row)
+    $name = ([string]$Row.Name).Trim()
+    if ($name -eq '') { return '' }
+    return Resolve-QueueOutputPath -Text $name -DefaultFolder ([string]$Row.OutputFolder)
+}
+
+function Update-QueueRowFiles {
+    # Only cheap checks: whether each path is there. Counting the photographs
+    # happens with the thumbnail, off to the side, so a scan of forty folders
+    # does not stall the window.
+    param([psobject]$Row)
+    $folder = [string]$Row.ImageFolder
+    $Row.ImagesOk = (-not [string]::IsNullOrWhiteSpace($folder)) -and (Test-Path -LiteralPath $folder -PathType Container)
+    $Row.AudioOk = Test-VoiceoverFile ([string]$Row.AudioPath)
+    $watermark = [string]$Row.WatermarkPath
+    $Row.WatermarkOk = (-not [string]::IsNullOrWhiteSpace($watermark)) -and
+        (Test-Path -LiteralPath $watermark -PathType Leaf) -and
+        (@('.mov', '.mp4') -contains [IO.Path]::GetExtension($watermark).ToLowerInvariant())
+}
+
+function Get-QueueRowProblem {
+    # What still stands between this video and Render all, in the words the
+    # status column shows. Kind decides the colour: ok, warn (something to
+    # type or choose) or bad (a file that is not there).
+    param([psobject]$Row)
+    if ([bool]$Row.Done) { return [pscustomobject]@{ Kind = 'done'; Text = 'Done' } }
+    if (-not [bool]$Row.ImagesOk) { return [pscustomobject]@{ Kind = 'bad'; Text = 'Image folder missing' } }
+    if ([int]$Row.ImageCount -eq 0) { return [pscustomobject]@{ Kind = 'bad'; Text = 'No images in folder' } }
+    if (-not [bool]$Row.AudioOk) { return [pscustomobject]@{ Kind = 'bad'; Text = 'Voiceover missing' } }
+    if (-not [bool]$Row.WatermarkOk) { return [pscustomobject]@{ Kind = 'bad'; Text = 'Watermark missing' } }
+    $name = ([string]$Row.Name).Trim()
+    if ($name -eq '') { return [pscustomobject]@{ Kind = 'warn'; Text = 'Needs a name' } }
+    if ([string]::IsNullOrWhiteSpace((Get-QueueRowOutputPath -Row $Row))) {
+        if ([string]::IsNullOrWhiteSpace([string]$Row.OutputFolder)) { return [pscustomobject]@{ Kind = 'warn'; Text = 'Choose a folder' } }
+        return [pscustomobject]@{ Kind = 'warn'; Text = 'Name not usable' }
+    }
+    return [pscustomobject]@{ Kind = 'ok'; Text = 'Ready' }
+}
+
+function New-QueueIconButton {
+    param([string]$Data, [string]$ToolTip, [string]$Tag, [bool]$Filled = $false)
+    $path = [Windows.Shapes.Path]::new()
+    $path.Data = [Windows.Media.Geometry]::Parse($Data)
+    if ($Filled) { $path.Fill = $script:DimBrush }
+    else {
+        $path.Stroke = $script:DimBrush
+        $path.StrokeThickness = 1.5
+    }
+    $path.HorizontalAlignment = 'Center'
+    $path.VerticalAlignment = 'Center'
+    $button = [Windows.Controls.Button]::new()
+    $button.Style = $window.FindResource('QuietButtonStyle')
+    $button.Content = $path
+    $button.Width = 28
+    $button.Height = 28
+    $button.Padding = [Windows.Thickness]::new(0)
+    $button.Margin = [Windows.Thickness]::new(2, 0, 0, 0)
+    $button.ToolTip = $ToolTip
+    $button.Tag = $Tag
+    return $button
+}
+
+function New-QueueCellText {
+    param([int]$Column, [Windows.Media.Brush]$Foreground, [double]$FontSize = 12.5)
+    $text = [Windows.Controls.TextBlock]::new()
+    $text.Foreground = $Foreground
+    $text.FontSize = $FontSize
+    $text.TextTrimming = 'CharacterEllipsis'
+    $text.VerticalAlignment = 'Center'
+    [Windows.Controls.Grid]::SetColumn($text, $Column)
+    return $text
+}
+
+function New-StatusPill {
+    param([int]$Column = -1)
+    $dot = [Windows.Shapes.Ellipse]::new()
+    $dot.Width = 6
+    $dot.Height = 6
+    $dot.Margin = [Windows.Thickness]::new(0, 0, 6, 0)
+    $dot.VerticalAlignment = 'Center'
+    $label = [Windows.Controls.TextBlock]::new()
+    $label.FontSize = 11.5
+    $label.VerticalAlignment = 'Center'
+    $label.TextTrimming = 'CharacterEllipsis'
+    $stack = [Windows.Controls.StackPanel]::new()
+    $stack.Orientation = 'Horizontal'
+    [void]$stack.Children.Add($dot)
+    [void]$stack.Children.Add($label)
+    $pill = [Windows.Controls.Border]::new()
+    $pill.CornerRadius = [Windows.CornerRadius]::new(11)
+    $pill.Padding = [Windows.Thickness]::new(9, 3, 10, 3)
+    $pill.HorizontalAlignment = 'Left'
+    $pill.VerticalAlignment = 'Center'
+    $pill.Child = $stack
+    if ($Column -ge 0) { [Windows.Controls.Grid]::SetColumn($pill, $Column) }
+    return [pscustomobject]@{ Border = $pill; Dot = $dot; Text = $label }
+}
+
+function Set-StatusPill {
+    param([psobject]$Pill, [string]$Kind, [string]$Text)
+    switch ($Kind) {
+        { $_ -in @('ok', 'done') } { $foreground = $script:OkTextBrush; $background = $script:OkTintBrush }
+        'warn' { $foreground = $script:AccentBrush; $background = $script:AccentTintBrush }
+        'bad' { $foreground = $script:BadBrush; $background = $script:BadTintBrush }
+        default { $foreground = $script:DimBrush; $background = $script:RaisedBrush }
+    }
+    $Pill.Border.Background = $background
+    $Pill.Dot.Fill = $foreground
+    $Pill.Text.Foreground = $foreground
+    $Pill.Text.Text = $Text
+}
+
+function New-QueueColumns {
+    param([Windows.Controls.Grid]$Grid, [int[]]$Widths)
+    # A negative width is the one column that takes what is left.
+    foreach ($width in $Widths) {
+        $column = [Windows.Controls.ColumnDefinition]::new()
+        $column.Width = if ($width -lt 0) { [Windows.GridLength]::new(1, [Windows.GridUnitType]::Star) } else { [Windows.GridLength]::new($width) }
+        $Grid.ColumnDefinitions.Add($column)
+    }
+}
+
+function New-QueueRowVisual {
+    # One line of the queue table. Its columns match the header in the window.
+    param([psobject]$Row)
+    $border = [Windows.Controls.Border]::new()
+    $border.Tag = [string]$Row.Id
+    $border.BorderBrush = $script:RowLineBrush
+    $border.BorderThickness = [Windows.Thickness]::new(0, 0, 0, 1)
+    $border.Padding = [Windows.Thickness]::new(12, 0, 12, 0)
+    $border.Height = 54
+    $border.Background = $script:TransparentBrush
+    $grid = [Windows.Controls.Grid]::new()
+    New-QueueColumns -Grid $grid -Widths @(30, 66, -1, 140, 64, 68, 142, 70)
+    $border.Child = $grid
+
+    $number = New-QueueCellText -Column 0 -Foreground $script:MutedBrush -FontSize 12
+    [void]$grid.Children.Add($number)
+
+    $thumbImage = [Windows.Controls.Image]::new()
+    $thumbImage.Stretch = 'UniformToFill'
+    [Windows.Media.RenderOptions]::SetBitmapScalingMode($thumbImage, [Windows.Media.BitmapScalingMode]::HighQuality)
+    $thumbHost = [Windows.Controls.Border]::new()
+    $thumbHost.Width = 56
+    $thumbHost.Height = 32
+    $thumbHost.CornerRadius = [Windows.CornerRadius]::new(4)
+    $thumbHost.Background = $script:ThumbFillBrush
+    $thumbHost.BorderBrush = New-ToolBrush '#3A3A42'
+    $thumbHost.BorderThickness = [Windows.Thickness]::new(1)
+    $thumbHost.ClipToBounds = $true
+    $thumbHost.HorizontalAlignment = 'Left'
+    $thumbHost.Child = $thumbImage
+    [Windows.Controls.Grid]::SetColumn($thumbHost, 1)
+    [void]$grid.Children.Add($thumbHost)
+
+    $nameBox = [Windows.Controls.TextBox]::new()
+    $nameBox.Tag = [string]$Row.Id
+    $nameBox.Text = [string]$Row.Name
+    $nameBox.Height = 32
+    $nameBox.VerticalAlignment = 'Center'
+    $nameBox.ToolTip = 'The video''s name. It is saved under this name in the folder shown in the panel on the right.'
+    [Windows.Controls.Grid]::SetColumn($nameBox, 2)
+    [void]$grid.Children.Add($nameBox)
+
+    $channel = New-QueueCellText -Column 3 -Foreground $script:DimBrush -FontSize 12
+    $channel.Margin = [Windows.Thickness]::new(10, 0, 8, 0)
+    [void]$grid.Children.Add($channel)
+    $images = New-QueueCellText -Column 4 -Foreground $script:DimBrush -FontSize 12
+    [void]$grid.Children.Add($images)
+    $length = New-QueueCellText -Column 5 -Foreground $script:DimBrush -FontSize 12
+    [void]$grid.Children.Add($length)
+
+    $pill = New-StatusPill -Column 6
+    [void]$grid.Children.Add($pill.Border)
+
+    $actions = [Windows.Controls.StackPanel]::new()
+    $actions.Orientation = 'Horizontal'
+    $actions.HorizontalAlignment = 'Right'
+    $actions.VerticalAlignment = 'Center'
+    [Windows.Controls.Grid]::SetColumn($actions, 7)
+    $previewButton = New-QueueIconButton -Data 'M0,0 L8,5 L0,10 Z' -ToolTip 'Preview 60 seconds of this video' -Tag ([string]$Row.Id) -Filled $true
+    $openButton = New-QueueIconButton -Data 'M0.5,1.5 L4.5,1.5 L6,3 L11.5,3 L11.5,9.5 L0.5,9.5 Z' -ToolTip 'Show the finished video in its folder' -Tag ([string]$Row.Id)
+    $removeButton = New-QueueIconButton -Data 'M0,0 L8,8 M8,0 L0,8' -ToolTip 'Remove from the queue' -Tag ([string]$Row.Id)
+    [void]$actions.Children.Add($previewButton)
+    [void]$actions.Children.Add($openButton)
+    [void]$actions.Children.Add($removeButton)
+    [void]$grid.Children.Add($actions)
+
+    $border.Add_MouseLeftButtonDown({ param($sender, $eventArgs) Select-QueueRow -Id ([string]$sender.Tag) })
+    $nameBox.Add_GotKeyboardFocus({ param($sender, $eventArgs) if ($script:SelectedQueueRowId -ne [string]$sender.Tag) { Select-QueueRow -Id ([string]$sender.Tag) } })
+    $nameBox.Add_TextChanged({ param($sender, $eventArgs) Set-QueueRowName -Id ([string]$sender.Tag) -Name ([string]$sender.Text) })
+    $previewButton.Add_Click({ param($sender, $eventArgs) Start-QueueRowPreview -Id ([string]$sender.Tag) })
+    $openButton.Add_Click({ param($sender, $eventArgs) $target = Get-QueueRow -Id ([string]$sender.Tag); if ($null -ne $target) { Open-OutputInFolder -Path ([string]$target.DoneOutput) } })
+    $removeButton.Add_Click({ param($sender, $eventArgs) Remove-QueueRow -Id ([string]$sender.Tag) })
+
+    return [pscustomobject]@{
+        Border = $border; Number = $number; Thumb = $thumbImage; NameBox = $nameBox
+        Channel = $channel; Images = $images; Length = $length; Pill = $pill
+        PreviewButton = $previewButton; OpenButton = $openButton; RemoveButton = $removeButton
+    }
+}
+
+function Update-QueueRowCells {
+    param([psobject]$Row)
+    $visual = $Row.Visual
+    if ($null -eq $visual) { return }
+    if ([string]::IsNullOrWhiteSpace([string]$Row.Channel)) {
+        $visual.Channel.Text = 'Added by hand'
+        $visual.Channel.Foreground = $script:MutedBrush
+    }
+    else {
+        $visual.Channel.Text = [string]$Row.Channel
+        $visual.Channel.Foreground = $script:DimBrush
+    }
+    $visual.Channel.ToolTip = [string]$Row.Label
+    $visual.Images.Text = if ([int]$Row.ImageCount -ge 0) { [string]$Row.ImageCount } else { '-' }
+    $visual.Length.Text = if ([double]$Row.Duration -gt 0) { Format-Clock ([double]$Row.Duration) } else { '-' }
+}
+
+function Add-QueueRow {
+    param([psobject]$Row, [switch]$Deferred)
+    $Row.Visual = New-QueueRowVisual -Row $Row
+    $script:QueueRows.Add($Row)
+    [void]$QueueRowsPanel.Children.Add($Row.Visual.Border)
+    Update-QueueRowFiles -Row $Row
+    Update-QueueRowCells -Row $Row
+    Request-QueueThumbnail -Row $Row
+    if (-not $Deferred) { Complete-QueueChange }
+}
+
+function Complete-QueueChange {
+    # Everything that depends on which videos are in the queue, redrawn once
+    # after a change rather than after every row of a scan.
+    param([bool]$Save = $true)
+    Update-QueueNumbers
+    Update-ChannelFilter
+    Update-QueueStatuses
+    Update-QueueRowVisibility
+    Update-QueueEditing
+    Update-BatchHeader
+    Update-BatchFooter
+    Start-QueueDurationProbe
+    if ($Save) { Save-QueueState }
+}
+
+function Update-QueueNumbers {
+    for ($index = 0; $index -lt $script:QueueRows.Count; $index++) {
+        $row = $script:QueueRows[$index]
+        if ($null -ne $row.Visual) { $row.Visual.Number.Text = [string]($index + 1) }
+    }
+}
+
+function Update-QueueStatuses {
+    # Two videos writing one file would leave a video of the day missing, and
+    # the batch would only find out after rendering both, so that is a status
+    # here too.
+    $claimed = @{}
+    for ($index = 0; $index -lt $script:QueueRows.Count; $index++) {
+        $row = $script:QueueRows[$index]
+        $problem = Get-QueueRowProblem -Row $row
+        $output = ''
+        if ($problem.Kind -eq 'ok') {
+            $output = Get-QueueRowOutputPath -Row $row
+            $key = $output.ToLowerInvariant()
+            if ($claimed.ContainsKey($key)) { $problem = [pscustomobject]@{ Kind = 'bad'; Text = "Same name as #$($claimed[$key])" } }
+            else { $claimed[$key] = $index + 1 }
+        }
+        $row.Problem = [string]$problem.Text
+        $row.ProblemKind = [string]$problem.Kind
+        if ($null -ne $row.Visual) {
+            Set-StatusPill -Pill $row.Visual.Pill -Kind $row.ProblemKind -Text $row.Problem
+            $row.Visual.Pill.Border.ToolTip = if ($row.ProblemKind -eq 'ok') { "Saves as $output" }
+                elseif ($row.ProblemKind -eq 'done') { [string]$row.DoneOutput }
+                else { $null }
+        }
+    }
+}
+
+function Update-QueueRowVisibility {
+    foreach ($row in $script:QueueRows) {
+        if ($null -eq $row.Visual) { continue }
+        $visible = ($script:ChannelFilter -eq '*') -or ((Get-QueueRowChannelKey -Row $row) -eq $script:ChannelFilter)
+        $row.Visual.Border.Visibility = ConvertTo-Visibility $visible
+    }
+}
+
+function Update-ChannelFilter {
+    # The channels in the queue, in the order they were scanned, each with how
+    # many of its videos are queued. Picking one narrows the table to it.
+    $order = [Collections.Generic.List[string]]::new()
+    $counts = @{}
+    foreach ($row in $script:QueueRows) {
+        $key = Get-QueueRowChannelKey -Row $row
+        if (-not $counts.ContainsKey($key)) { $counts[$key] = 0; $order.Add($key) }
+        $counts[$key] = [int]$counts[$key] + 1
+    }
+    # Videos added by hand are listed after the channels.
+    if ($order.Contains('#hand')) { [void]$order.Remove('#hand'); $order.Add('#hand') }
+    if ($script:ChannelFilter -ne '*' -and -not $counts.ContainsKey($script:ChannelFilter)) { $script:ChannelFilter = '*' }
+
+    $ChannelFilterPanel.Children.Clear()
+    $entries = @([pscustomobject]@{ Key = '*'; Label = 'All videos'; Count = $script:QueueRows.Count })
+    foreach ($key in $order) {
+        $label = if ($key -eq '#hand') { 'Added by hand' } else { $key }
+        $entries += [pscustomobject]@{ Key = $key; Label = $label; Count = [int]$counts[$key] }
+    }
+    foreach ($entry in $entries) {
+        $isActive = ($entry.Key -eq $script:ChannelFilter)
+        $label = [Windows.Controls.TextBlock]::new()
+        $label.Text = [string]$entry.Label
+        $label.FontSize = 13
+        $label.TextTrimming = 'CharacterEllipsis'
+        $label.FontWeight = if ($isActive) { 'SemiBold' } else { 'Normal' }
+        $count = [Windows.Controls.TextBlock]::new()
+        $count.Text = [string]$entry.Count
+        $count.FontSize = 11
+        $count.Foreground = $script:DimBrush
+        $count.Margin = [Windows.Thickness]::new(8, 0, 0, 0)
+        [Windows.Controls.Grid]::SetColumn($count, 1)
+        $grid = [Windows.Controls.Grid]::new()
+        New-QueueColumns -Grid $grid -Widths @(-1, 0)
+        $grid.ColumnDefinitions[1].Width = [Windows.GridLength]::Auto
+        [void]$grid.Children.Add($label)
+        [void]$grid.Children.Add($count)
+        $button = [Windows.Controls.Button]::new()
+        $button.Style = $window.FindResource('StepButtonStyle')
+        $button.Content = $grid
+        $button.Tag = [string]$entry.Key
+        $button.ToolTip = if ($entry.Key -eq '#hand') { 'Videos added one at a time with + Add video' } else { $null }
+        $button.Background = if ($isActive) { $script:AccentTintBrush } else { $script:TransparentBrush }
+        $button.BorderBrush = if ($isActive) { $script:AccentDeepBrush } else { $script:TransparentBrush }
+        $button.Add_Click({ param($sender, $eventArgs) Set-ChannelFilter -Key ([string]$sender.Tag) })
+        [void]$ChannelFilterPanel.Children.Add($button)
+    }
+}
+
+function Set-ChannelFilter {
+    param([string]$Key)
+    $script:ChannelFilter = $Key
+    Update-ChannelFilter
+    Update-QueueRowVisibility
+}
+
+function Update-QueueEditing {
+    # Nothing in the queue changes under a running render, and a finished
+    # video keeps the name it was saved under.
+    $busy = Test-JobActive
+    $run = $script:BatchRun
+    $showRun = ($null -ne $run)
+    $QueueTableHost.Visibility = ConvertTo-Visibility (-not $showRun)
+    $RenderTableHost.Visibility = ConvertTo-Visibility $showRun
+    $QueueActionsPanel.Visibility = ConvertTo-Visibility (-not $showRun)
+    $ShowQueueButton.Visibility = ConvertTo-Visibility ($showRun -and -not [bool]$run.Running)
+    $DefaultWatermarkRow.Visibility = ConvertTo-Visibility (-not $showRun)
+    $ScanSummaryBorder.Visibility = ConvertTo-Visibility ((-not $showRun) -and -not [string]::IsNullOrWhiteSpace($ScanSummaryText.Text))
+    $QueueEmptyPanel.Visibility = ConvertTo-Visibility ($script:QueueRows.Count -eq 0)
+    $ClearFinishedButton.Visibility = ConvertTo-Visibility (@($script:QueueRows | Where-Object { [bool]$_.Done }).Count -gt 0)
+    foreach ($row in $script:QueueRows) {
+        $visual = $row.Visual
+        if ($null -eq $visual) { continue }
+        $isDone = [bool]$row.Done
+        $visual.NameBox.IsReadOnly = $busy -or $isDone
+        $visual.NameBox.Foreground = if ($isDone) { $script:DimBrush } else { $script:TextBrush }
+        $visual.PreviewButton.Visibility = ConvertTo-Visibility (-not $isDone)
+        $visual.PreviewButton.IsEnabled = -not $busy
+        $visual.OpenButton.Visibility = ConvertTo-Visibility $isDone
+        $visual.RemoveButton.IsEnabled = -not $busy
+    }
+    foreach ($box in @($SelectedNameText, $SelectedOutputFolderText, $SelectedImagesText, $SelectedAudioText, $SelectedWatermarkText)) {
+        $box.IsReadOnly = $busy
+    }
+    foreach ($button in @($SelectedOutputBrowseButton, $SelectedImagesBrowseButton, $SelectedAudioBrowseButton, $SelectedWatermarkBrowseButton)) {
+        $button.IsEnabled = -not $busy
+    }
+}
+
+function Update-BatchHeader {
+    $run = $script:BatchRun
+    if ($null -ne $run) {
+        $items = @($run.Items)
+        $done = @($items | Where-Object { $_.State -eq 'Done' }).Count
+        $active = @($items | Where-Object { $_.State -eq 'Rendering' }).Count
+        $waiting = @($items | Where-Object { $_.State -eq 'Queued' }).Count
+        $stopped = @($items | Where-Object { $_.State -in @('Paused', 'Failed') }).Count
+        $BatchHeadingText.Text = if ([bool]$run.Running) { 'Rendering the batch' }
+            elseif ($run.Result -eq 'Completed') { 'Batch finished' }
+            elseif ($run.Result -eq 'Paused') { 'Batch paused' }
+            else { 'Batch stopped' }
+        $parts = @("$done of $($items.Count) finished")
+        if ($active -gt 0) { $parts += 'one rendering' }
+        if ($waiting -gt 0) { $parts += "$waiting waiting" }
+        if ($stopped -gt 0) { $parts += "$stopped stopped" }
+        $BatchSubheadingText.Text = $parts -join ', '
+        return
+    }
+    $BatchHeadingText.Text = "Today's queue"
+    $total = $script:QueueRows.Count
+    if ($total -eq 0) {
+        $BatchSubheadingText.Text = 'Scan your channels folder to queue the day''s videos.'
+        return
+    }
+    $channels = @($script:QueueRows | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_.Channel) } | ForEach-Object { [string]$_.Channel } | Sort-Object -Unique).Count
+    $finished = @($script:QueueRows | Where-Object { [bool]$_.Done }).Count
+    $text = if ($total -eq 1) { '1 video' } else { "$total videos" }
+    if ($channels -eq 1) { $text += ' from 1 channel folder' }
+    elseif ($channels -gt 1) { $text += " from $channels channel folders" }
+    if ($finished -gt 0) { $text += ", $finished finished" }
+    if ($channels -gt 0 -and -not [string]::IsNullOrWhiteSpace([string]$script:LastChannelsRoot)) { $text += "   -   $($script:LastChannelsRoot)" }
+    $BatchSubheadingText.Text = $text
+}
+
+function Select-QueueRow {
+    param([string]$Id)
+    $script:SelectedQueueRowId = $Id
+    foreach ($row in $script:QueueRows) {
+        if ($null -eq $row.Visual) { continue }
+        $row.Visual.Border.Background = if ([string]$row.Id -eq $Id) { $script:RaisedBrush } else { $script:TransparentBrush }
+    }
+    # Picking a video means looking at it, so the shared settings step aside.
+    if (-not [string]::IsNullOrWhiteSpace($script:BatchSettingsSection)) {
+        $script:BatchSettingsSection = ''
+        Update-BatchNavHighlight
+    }
+    Update-BatchInspector
+}
+
+function Set-QueueRowName {
+    param([string]$Id, [string]$Name)
+    $row = Get-QueueRow -Id $Id
+    if ($null -eq $row) { return }
+    $row.Name = $Name
+    if ($script:SelectedQueueRowId -eq $Id -and $SelectedNameText.Text -ne $Name) {
+        $script:IsFillingInspector = $true
+        try { $SelectedNameText.Text = $Name }
+        finally { $script:IsFillingInspector = $false }
+    }
+    Update-QueueStatuses
+    if ($script:SelectedQueueRowId -eq $Id) { Update-SelectedRowSummary -Row $row }
+    Update-BatchFooter
+}
+
+function Set-SelectedQueueRowPath {
+    # A path changed in the panel on the right, by typing or by Browse.
+    param([ValidateSet('ImageFolder', 'AudioPath', 'WatermarkPath', 'OutputFolder')][string]$Field, [string]$Value)
+    if ($script:IsFillingInspector) { return }
+    $row = Get-SelectedQueueRow
+    if ($null -eq $row) { return }
+    $Value = ([string]$Value).Trim()
+    if ([string]$row.$Field -eq $Value) { return }
+    $row.$Field = $Value
+    if ($Field -eq 'ImageFolder') {
+        $row.ImageCount = -1
+        $row.PreviewPlan = $null
+        Request-QueueThumbnail -Row $row
+    }
+    elseif ($Field -eq 'AudioPath') {
+        $row.Duration = 0.0
+        $row.DurationProbed = $false
+        $row.PreviewPlan = $null
+    }
+    Update-QueueRowFiles -Row $row
+    Update-QueueRowCells -Row $row
+    Update-QueueStatuses
+    Update-SelectedRowSummary -Row $row
+    Update-BatchFooter
+    Start-QueueDurationProbe
+}
+
+function Remove-QueueRow {
+    param([string]$Id)
+    if (Test-JobActive) { return }
+    $row = Get-QueueRow -Id $Id
+    if ($null -eq $row) { return }
+    $index = $script:QueueRows.IndexOf($row)
+    [void]$script:QueueRows.Remove($row)
+    if ($null -ne $row.Visual) { [void]$QueueRowsPanel.Children.Remove($row.Visual.Border) }
+    if ($script:QueuePreviewRowId -eq $Id) { $script:QueuePreviewRowId = '' }
+    if ($script:SelectedQueueRowId -eq $Id) {
+        # The next video takes its place under the pointer, as a list does
+        # when a line is deleted from it.
+        $script:SelectedQueueRowId = ''
+        if ($script:QueueRows.Count -gt 0) {
+            $next = $script:QueueRows[[Math]::Min($index, $script:QueueRows.Count - 1)]
+            $script:SelectedQueueRowId = [string]$next.Id
+        }
+    }
+    Complete-QueueChange
+    Select-QueueRow -Id $script:SelectedQueueRowId
+}
+
+function Clear-FinishedQueueRows {
+    if (Test-JobActive) { return }
+    foreach ($row in @($script:QueueRows | Where-Object { [bool]$_.Done })) {
+        [void]$script:QueueRows.Remove($row)
+        if ($null -ne $row.Visual) { [void]$QueueRowsPanel.Children.Remove($row.Visual.Border) }
+        if ($script:SelectedQueueRowId -eq [string]$row.Id) { $script:SelectedQueueRowId = '' }
+    }
+    Complete-QueueChange
+    Update-BatchInspector
+}
+
+function Add-QueueVideoByHand {
+    # One video's image folder. Its voiceover is the audio file of the same name
+    # beside the folder, the way channel folders are laid out, and the finished
+    # video goes in that same folder until another is chosen.
+    if (Test-JobActive) { return }
+    $start = ''
+    $selected = Get-SelectedQueueRow
+    if ($null -ne $selected -and -not [string]::IsNullOrWhiteSpace([string]$selected.ImageFolder)) { $start = Split-Path -Parent ([string]$selected.ImageFolder) }
+    elseif (-not [string]::IsNullOrWhiteSpace([string]$script:LastChannelsRoot)) { $start = [string]$script:LastChannelsRoot }
+    $picked = Select-Folder -Description 'Select the folder holding this video''s images' -InitialPath $start
+    if ([string]::IsNullOrWhiteSpace($picked)) { return }
+    $parent = Split-Path -Parent $picked
+    $leaf = Split-Path -Leaf $picked
+    $audio = ''
+    if (-not [string]::IsNullOrWhiteSpace($parent)) {
+        foreach ($extension in $script:VoiceoverExtensions) {
+            $candidate = Join-Path $parent "$leaf$extension"
+            if (Test-Path -LiteralPath $candidate -PathType Leaf) { $audio = $candidate; break }
+        }
+    }
+    $row = New-QueueRow -Label $leaf -ImageFolder $picked -AudioPath $audio -WatermarkPath $BatchWatermarkText.Text.Trim() -OutputFolder $parent
+    Add-QueueRow -Row $row
+    Select-QueueRow -Id ([string]$row.Id)
+    [void]$row.Visual.NameBox.Focus()
+    if ([string]::IsNullOrWhiteSpace($audio)) {
+        $StatusText.Text = "No voiceover named $leaf was found beside the folder. Choose it in the panel on the right."
+    }
+}
+
+function Invoke-ChannelScan {
+    # Pairs every numbered image folder in each channel folder with the
+    # voiceover of the same name. A folder already in the queue is not added a
+    # second time, so the same channels folder can be scanned again after
+    # more of the day's files arrive.
+    if (Test-JobActive) { return }
     try {
-        if ($rows.Count -eq 0) { throw 'Add at least one video to the queue.' }
+        $picked = Select-Folder -Description 'Select the folder that holds your channel folders' -InitialPath $script:LastChannelsRoot
+        if ([string]::IsNullOrWhiteSpace($picked)) { return }
+        $StatusText.Text = 'Scanning channel folders...'
+        $window.Dispatcher.Invoke([action]{}, [Windows.Threading.DispatcherPriority]::Background)
+        $scan = Get-ChannelQueueScan -Root $picked
+        $found = @($scan.Items)
+        $ignored = @($scan.Skipped)
+        $script:LastScanSkipped = $ignored
+        $ScanSkippedButton.Content = "$($ignored.Count) skipped - why?"
+        $ScanSkippedButton.Visibility = ConvertTo-Visibility ($ignored.Count -gt 0)
+        if ($found.Count -eq 0) {
+            $ScanSummaryText.Text = "Nothing could be queued from $picked."
+            Update-QueueEditing
+            Show-ErrorMessage ("Nothing in that folder could be queued:`r`n$picked`r`n`r`n" + ((@($ignored) | Select-Object -First 25) -join "`r`n")) 'Nothing to queue'
+            return
+        }
+        $script:LastChannelsRoot = $picked
+        $alreadyQueued = @{}
+        foreach ($existing in $script:QueueRows) {
+            if (-not [bool]$existing.Done) { $alreadyQueued[([string]$existing.ImageFolder).ToLowerInvariant()] = $true }
+        }
+        $added = [Collections.Generic.List[object]]::new()
+        $skippedAsQueued = 0
+        foreach ($item in $found) {
+            if ($alreadyQueued.ContainsKey(([string]$item.ImageFolder).ToLowerInvariant())) { $skippedAsQueued++; continue }
+            $row = New-QueueRow -Channel ([string]$item.Channel) -Label ([string]$item.Label) -ImageFolder ([string]$item.ImageFolder) `
+                -AudioPath ([string]$item.AudioPath) -WatermarkPath ([string]$item.WatermarkPath) -OutputFolder ([string]$item.OutputFolder) `
+                -Name ([string]$item.Title) -ImageCount ([int]$item.ImageCount)
+            Add-QueueRow -Row $row -Deferred
+            $added.Add($row)
+        }
+        Complete-QueueChange
+        $channelCount = @($found | ForEach-Object { $_.Channel } | Sort-Object -Unique).Count
+        $titled = @($added | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_.Name) }).Count
+        if ($added.Count -eq 0) {
+            $summary = "Every video in $picked is already in the queue."
+        }
+        elseif ($titled -eq $added.Count) { $summary = "Queued $($added.Count) video(s) from $channelCount channel folder(s), every one named from titles.txt. Check the names, then Render all." }
+        elseif ($titled -gt 0) { $summary = "Queued $($added.Count) video(s) from $channelCount channel folder(s). titles.txt named $titled; type a name for the other $($added.Count - $titled), then Render all." }
+        else { $summary = "Queued $($added.Count) video(s) from $channelCount channel folder(s). Type a name for each, then Render all." }
+        if ($skippedAsQueued -gt 0 -and $added.Count -gt 0) { $summary += " $skippedAsQueued were already in the queue." }
+        $ScanSummaryText.Text = $summary
+        Update-QueueEditing
+        Update-BatchHeader
+        # The caret waits in the first box that still needs a name.
+        $firstUnnamed = @($added | Where-Object { [string]::IsNullOrWhiteSpace(([string]$_.Name).Trim()) }) | Select-Object -First 1
+        if ($null -eq $firstUnnamed -and $added.Count -gt 0) { $firstUnnamed = $added[0] }
+        if ($null -ne $firstUnnamed) {
+            Set-ChannelFilter -Key '*'
+            Select-QueueRow -Id ([string]$firstUnnamed.Id)
+            $firstUnnamed.Visual.Border.BringIntoView()
+            [void]$firstUnnamed.Visual.NameBox.Focus()
+            $firstUnnamed.Visual.NameBox.CaretIndex = $firstUnnamed.Visual.NameBox.Text.Length
+        }
+    }
+    catch {
+        Write-ToolDiagnostic 'Scanning the channels folder failed.' $_.Exception
+        Show-ErrorMessage $_.Exception.Message 'Could not scan channels'
+        Update-BatchFooter
+    }
+}
+
+function Show-ScanSkipped {
+    $skipped = @($script:LastScanSkipped)
+    if ($skipped.Count -eq 0) { return }
+    $shown = @($skipped | Select-Object -First 40)
+    $text = $shown -join "`r`n"
+    if ($skipped.Count -gt $shown.Count) { $text += "`r`n`r`n...and $($skipped.Count - $shown.Count) more." }
+    Show-InfoMessage $text 'Skipped while scanning'
+}
+
+# --- Thumbnails and voiceover lengths, off to the side ----------------------
+
+function Request-QueueThumbnail {
+    param([psobject]$Row)
+    $script:ThumbnailRequests.Enqueue([string]$Row.Id)
+    $script:QueueTimer.Start()
+}
+
+function Update-QueueRowThumbnail {
+    # Lists the image folder - which also counts the photographs - and shows
+    # the first of them. Decoded small, so forty rows cost little memory.
+    param([psobject]$Row)
+    if ($null -eq $Row.Visual) { return }
+    $Row.Visual.Thumb.Source = $null
+    if ([bool]$Row.ImagesOk) {
+        try {
+            $files = @(Get-SupportedImageFiles -Folder ([string]$Row.ImageFolder))
+            $Row.ImageCount = $files.Count
+            if ($files.Count -gt 0) {
+                $bitmap = [Windows.Media.Imaging.BitmapImage]::new()
+                $bitmap.BeginInit()
+                $bitmap.CacheOption = [Windows.Media.Imaging.BitmapCacheOption]::OnLoad
+                $bitmap.DecodePixelWidth = 320
+                $bitmap.UriSource = [uri]([string]$files[0])
+                $bitmap.EndInit()
+                $bitmap.Freeze()
+                $Row.Visual.Thumb.Source = $bitmap
+            }
+        }
+        catch {}
+    }
+    Update-QueueRowCells -Row $Row
+    Update-QueueStatuses
+    Update-BatchFooter
+    if ($script:SelectedQueueRowId -eq [string]$Row.Id) { Update-BatchInspector }
+}
+
+function Start-QueueDurationProbe {
+    # Voiceover lengths come from FFprobe, a fraction of a second each. Forty of
+    # them on the interface thread would freeze the window for several seconds,
+    # so they are measured on a runspace of their own, the way the update
+    # check is.
+    if ($null -ne $script:DurationProbe) { return }
+    if ([string]::IsNullOrWhiteSpace([string]$script:FfprobePath)) { return }
+    $paths = [Collections.Generic.List[string]]::new()
+    foreach ($row in $script:QueueRows) {
+        if ([double]$row.Duration -gt 0 -or [bool]$row.DurationProbed -or -not [bool]$row.AudioOk) { continue }
+        $row.DurationProbed = $true
+        if (-not $paths.Contains([string]$row.AudioPath)) { $paths.Add([string]$row.AudioPath) }
+    }
+    if ($paths.Count -eq 0) { return }
+    $runspace = [runspacefactory]::CreateRunspace()
+    $runspace.Open()
+    $runspace.SessionStateProxy.SetVariable('ModulePath', (Join-Path $script:AppRoot 'SlideshowEngine.psm1'))
+    $runspace.SessionStateProxy.SetVariable('ProbePath', [string]$script:FfprobePath)
+    $runspace.SessionStateProxy.SetVariable('AudioPaths', $paths.ToArray())
+    $shell = [powershell]::Create()
+    $shell.Runspace = $runspace
+    [void]$shell.AddScript({
+        Import-Module $ModulePath -Force
+        foreach ($audioPath in $AudioPaths) {
+            $seconds = 0.0
+            try { $seconds = [double](Get-MediaDurationSeconds -FfprobePath $ProbePath -MediaPath $audioPath) } catch {}
+            [pscustomobject]@{ Path = $audioPath; Seconds = $seconds }
+        }
+    })
+    $script:DurationProbe = [pscustomobject]@{ Shell = $shell; Runspace = $runspace; Handle = $shell.BeginInvoke() }
+    $script:QueueTimer.Start()
+    Update-BatchFooter
+}
+
+function Complete-QueueDurationProbe {
+    $probe = $script:DurationProbe
+    if ($null -eq $probe -or -not $probe.Handle.IsCompleted) { return }
+    $script:DurationProbe = $null
+    $results = @()
+    try { $results = @($probe.Shell.EndInvoke($probe.Handle)) }
+    catch { Write-ToolDiagnostic 'Measuring queued voiceovers failed.' $_.Exception }
+    finally {
+        $probe.Shell.Dispose()
+        $probe.Runspace.Close()
+        $probe.Runspace.Dispose()
+    }
+    $byPath = @{}
+    foreach ($result in $results) {
+        if ($null -ne $result -and [double]$result.Seconds -gt 0) { $byPath[([string]$result.Path).ToLowerInvariant()] = [double]$result.Seconds }
+    }
+    foreach ($row in $script:QueueRows) {
+        $key = ([string]$row.AudioPath).ToLowerInvariant()
+        if ($byPath.ContainsKey($key)) {
+            $row.Duration = [double]$byPath[$key]
+            Update-QueueRowCells -Row $row
+        }
+    }
+    Update-BatchFooter
+    # Videos added while these were being measured.
+    Start-QueueDurationProbe
+}
+
+# --- Estimates ---------------------------------------------------------------
+
+function Get-RenderSpeedEstimate {
+    # Seconds of video rendered per second, for the chosen motion quality. A
+    # finished batch on this computer replaces the starting figures, which are
+    # the README's measurements at 24 FPS.
+    $quality = Get-ComboText $MotionQualityCombo
+    if ($script:RenderSpeeds.ContainsKey($quality) -and [double]$script:RenderSpeeds[$quality] -gt 0) { return [double]$script:RenderSpeeds[$quality] }
+    switch ($quality) {
+        'Fast' { return 2.8 }
+        'Best' { return 1.35 }
+        default { return 2.45 }
+    }
+}
+
+function Format-LongDuration {
+    param([double]$Seconds)
+    if ($Seconds -lt 60) { return 'under a minute' }
+    $totalMinutes = [int][Math]::Round($Seconds / 60.0)
+    $hours = [int][Math]::Floor($totalMinutes / 60)
+    $minutes = $totalMinutes - ($hours * 60)
+    if ($hours -gt 0) { return ('{0} h {1:00} min' -f $hours, $minutes) }
+    return "$minutes min"
+}
+
+function Get-QueueEstimateText {
+    param([object[]]$Pending)
+    $rows = @($Pending)
+    if ($rows.Count -eq 0) { return '' }
+    $known = @($rows | Where-Object { [double]$_.Duration -gt 0 })
+    if ($known.Count -eq 0) {
+        if ($null -ne $script:DurationProbe) { return 'measuring voiceovers...' }
+        return ''
+    }
+    $quality = Get-ComboText $QualityCombo
+    $videoSeconds = 0.0
+    $megabytes = 0.0
+    foreach ($row in $known) {
+        $videoSeconds += [double]$row.Duration
+        $megabytes += [double](Get-EstimatedOutputSizeMb -DurationSeconds ([double]$row.Duration) -Quality $quality)
+    }
+    $text = "about $(Format-LongDuration ($videoSeconds / (Get-RenderSpeedEstimate))), $(Format-ByteSize ($megabytes * 1MB))"
+    if ($known.Count -lt $rows.Count) { $text += " (for $($known.Count) of $($rows.Count))" }
+    return $text
+}
+
+# --- The panels around the queue ---------------------------------------------
+
+function Update-BatchFooter {
+    if ($script:IsLoading) { return }
+    $run = $script:BatchRun
+    $runRunning = ($null -ne $run) -and [bool]$run.Running
+    $pending = @($script:QueueRows | Where-Object { -not [bool]$_.Done })
+    $BatchCountText.Text = [string]$pending.Count
+    $RenderAllButton.Visibility = ConvertTo-Visibility ($null -eq $run)
+    $RenderAllButton.Content = if ($pending.Count -gt 0) { "Render all $($pending.Count)" } else { 'Render all' }
+    $BatchPauseButton.Visibility = ConvertTo-Visibility $runRunning
+    $BatchPauseButton.IsEnabled = $runRunning -and -not $script:CancelRequested
+    $BatchResumeButton.Visibility = ConvertTo-Visibility (($null -ne $run) -and -not $runRunning -and ([string]$run.Result -in @('Paused', 'Failed')))
+    $finalPath = [string]$script:FinalOutputPath
+    $BatchOpenFolderButton.IsEnabled = (-not [string]::IsNullOrWhiteSpace($finalPath)) -and (Test-Path -LiteralPath $finalPath -PathType Leaf)
+    $BatchEstimateText.Text = if ($null -eq $run) { Get-QueueEstimateText -Pending $pending } else { '' }
+
+    # While a job runs, the status line is its progress.
+    if ($script:AppMode -ne 'Batch' -or (Test-JobActive)) { return }
+    $ReadinessPanel.Children.Clear()
+    if ($null -ne $run) {
+        $StatusText.Text = [string]$run.ResultText
+        return
+    }
+    if ($pending.Count -eq 0) {
+        $StatusText.Text = if ($script:QueueRows.Count -gt 0) { 'Every video in the queue is finished.' } else { 'The queue is empty.' }
+        return
+    }
+    $ready = @($pending | Where-Object { $_.ProblemKind -eq 'ok' }).Count
+    $StatusText.Text = "$ready of $($pending.Count) ready"
+    # What is still missing, grouped, rather than a button with no reason.
+    $groups = @($pending | Where-Object { $_.ProblemKind -ne 'ok' } | Group-Object -Property Problem | Sort-Object -Property Count -Descending)
+    foreach ($group in ($groups | Select-Object -First 4)) {
+        Add-ReadinessCheck -Label "$($group.Name) ($($group.Count))" -Done $false
+    }
+}
+
+function Update-BatchNavHighlight {
+    $buttons = @{ Motion = $BatchNavMotionButton; Captions = $BatchNavCaptionsButton; Blanking = $BatchNavBlankingButton; Export = $BatchNavExportButton }
+    foreach ($key in $buttons.Keys) {
+        $isActive = ($key -eq $script:BatchSettingsSection)
+        $buttons[$key].Background = if ($isActive) { $script:AccentTintBrush } else { $script:TransparentBrush }
+        $buttons[$key].BorderBrush = if ($isActive) { $script:AccentDeepBrush } else { $script:TransparentBrush }
+    }
+}
+
+function Show-BatchSettings {
+    # The shared settings open where the selected video's files were.
+    param([string]$Name)
+    $script:BatchSettingsSection = $Name
+    Set-ActiveSection $Name
+    Update-BatchNavHighlight
+    Update-BatchInspector
+}
+
+function Hide-BatchSettings {
+    $script:BatchSettingsSection = ''
+    Update-BatchNavHighlight
+    Update-BatchInspector
+}
+
+function Get-QueueCaptionNote {
+    param([psobject]$Row)
+    $mode = Get-ComboText $CaptionModeCombo
+    if ($mode -eq 'Off') { return 'Captions are off for the batch. Turn them on under Captions in the left rail.' }
+    if (-not [bool]$Row.AudioOk) { return 'Choose a voiceover to caption this video.' }
+    try {
+        $cachePath = Get-CaptionCachePath -AudioPath ([string]$Row.AudioPath) -DataRoot $script:DataRoot
+        if (Test-Path -LiteralPath $cachePath -PathType Leaf) { return 'Captions are ready for this voiceover. Edit captions opens them to check or correct.' }
+    }
+    catch {}
+    return 'Captions are generated from this voiceover when the batch reaches it. Edit captions generates them now, so they can be checked first.'
+}
+
+function Update-SelectedRowSummary {
+    param([psobject]$Row)
+    $number = Get-QueueRowNumber -Row $Row
+    $SelectedTitleText.Text = "#$number  $(Get-QueueRowTitle -Row $Row)"
+    $output = Get-QueueRowOutputPath -Row $Row
+    $SelectedSavesAsText.Text = if ([bool]$Row.Done) { "Finished: $($Row.DoneOutput)" }
+        elseif (-not [string]::IsNullOrWhiteSpace($output)) { "Saves as $output" }
+        else { [string]$Row.Problem }
+    $SelectedCaptionStatusText.Text = Get-QueueCaptionNote -Row $Row
+}
+
+function Update-BatchInspector {
+    if ($script:IsLoading -or $script:AppMode -ne 'Batch') { return }
+    if (-not [string]::IsNullOrWhiteSpace($script:BatchSettingsSection)) {
+        $SettingsPanel.Visibility = [Windows.Visibility]::Visible
+        $SettingsBackButton.Visibility = [Windows.Visibility]::Visible
+        $BatchInspectorPanel.Visibility = [Windows.Visibility]::Collapsed
+        return
+    }
+    $SettingsPanel.Visibility = [Windows.Visibility]::Collapsed
+    $SettingsBackButton.Visibility = [Windows.Visibility]::Collapsed
+    $BatchInspectorPanel.Visibility = [Windows.Visibility]::Visible
+    if ($null -ne $script:BatchRun) {
+        $NowRenderingView.Visibility = [Windows.Visibility]::Visible
+        $SelectedVideoView.Visibility = [Windows.Visibility]::Collapsed
+        $NoSelectionView.Visibility = [Windows.Visibility]::Collapsed
+        return
+    }
+    $NowRenderingView.Visibility = [Windows.Visibility]::Collapsed
+    $row = Get-SelectedQueueRow
+    if ($null -eq $row) {
+        $SelectedVideoView.Visibility = [Windows.Visibility]::Collapsed
+        $NoSelectionView.Visibility = [Windows.Visibility]::Visible
+        return
+    }
+    $NoSelectionView.Visibility = [Windows.Visibility]::Collapsed
+    $SelectedVideoView.Visibility = [Windows.Visibility]::Visible
+    $script:IsFillingInspector = $true
+    try {
+        # Only what differs is written back, so the caret of a box being typed
+        # in does not jump.
+        if ($SelectedNameText.Text -ne [string]$row.Name) { $SelectedNameText.Text = [string]$row.Name }
+        if ($SelectedOutputFolderText.Text -ne [string]$row.OutputFolder) { $SelectedOutputFolderText.Text = [string]$row.OutputFolder }
+        if ($SelectedImagesText.Text -ne [string]$row.ImageFolder) { $SelectedImagesText.Text = [string]$row.ImageFolder }
+        if ($SelectedAudioText.Text -ne [string]$row.AudioPath) { $SelectedAudioText.Text = [string]$row.AudioPath }
+        if ($SelectedWatermarkText.Text -ne [string]$row.WatermarkPath) { $SelectedWatermarkText.Text = [string]$row.WatermarkPath }
+    }
+    finally { $script:IsFillingInspector = $false }
+    $SelectedThumbImage.Source = if ($null -ne $row.Visual) { $row.Visual.Thumb.Source } else { $null }
+    $SelectedThumbHint.Visibility = ConvertTo-Visibility ($null -eq $SelectedThumbImage.Source)
+    $SelectedThumbHint.Text = if ([bool]$row.ImagesOk) { 'First image of the folder' } else { 'The image folder is missing' }
+    $isDone = [bool]$row.Done
+    $SelectedPreviewButton.Visibility = ConvertTo-Visibility (-not $isDone)
+    $SelectedCaptionsButton.Visibility = ConvertTo-Visibility (-not $isDone)
+    $SelectedNameText.IsReadOnly = $isDone -or (Test-JobActive)
+    Update-SelectedRowSummary -Row $row
+}
+
+function Open-OutputInFolder {
+    param([string]$Path)
+    if ([string]::IsNullOrWhiteSpace($Path)) { return }
+    if (Test-Path -LiteralPath $Path -PathType Leaf) {
+        Start-Process explorer.exe -ArgumentList "/select,`"$Path`""
+        return
+    }
+    $folder = Split-Path -Parent $Path
+    if (-not [string]::IsNullOrWhiteSpace($folder) -and (Test-Path -LiteralPath $folder -PathType Container)) {
+        Start-Process explorer.exe -ArgumentList "`"$folder`""
+        return
+    }
+    Show-InfoMessage "That video is no longer where it was saved:`r`n$Path" 'Video not found'
+}
+
+# --- Moving between the queue and Single video -------------------------------
+
+function Set-AppMode {
+    param([ValidateSet('Batch', 'Single')][string]$Mode)
+    if ($script:IsFullScreen) { Toggle-FullScreen }
+    $script:AppMode = $Mode
+    $isBatch = ($Mode -eq 'Batch')
+    $ModeBatchButton.Background = if ($isBatch) { $script:RaisedBrush } else { $script:TransparentBrush }
+    $ModeBatchButton.BorderBrush = if ($isBatch) { $script:StrongLineBrush } else { $script:TransparentBrush }
+    $ModeBatchLabel.Foreground = if ($isBatch) { $script:TextBrush } else { $script:DimBrush }
+    $ModeBatchLabel.FontWeight = if ($isBatch) { 'SemiBold' } else { 'Normal' }
+    $ModeSingleButton.Background = if (-not $isBatch) { $script:RaisedBrush } else { $script:TransparentBrush }
+    $ModeSingleButton.BorderBrush = if (-not $isBatch) { $script:StrongLineBrush } else { $script:TransparentBrush }
+    $ModeSingleLabel.Foreground = if (-not $isBatch) { $script:TextBrush } else { $script:DimBrush }
+    $ModeSingleLabel.FontWeight = if (-not $isBatch) { 'SemiBold' } else { 'Normal' }
+
+    foreach ($control in @($BatchView, $BatchRailPanel, $BatchFooterButtons, $BatchCaptionNoteText, $BatchExportNoteText)) {
+        $control.Visibility = ConvertTo-Visibility $isBatch
+    }
+    foreach ($control in @($SingleView, $SingleRailPanel, $SingleFooterButtons, $SingleOnlyCaptionPanel, $SingleOnlyExportPanel)) {
+        $control.Visibility = ConvertTo-Visibility (-not $isBatch)
+    }
+    if ($isBatch) {
+        Stop-PreviewPlayback
+        Update-BatchNavHighlight
+        Update-BatchInspector
+    }
+    else {
+        $BatchInspectorPanel.Visibility = [Windows.Visibility]::Collapsed
+        $SettingsPanel.Visibility = [Windows.Visibility]::Visible
+        $SettingsBackButton.Visibility = [Windows.Visibility]::Collapsed
+        Set-ActiveSection $script:SingleActiveSection
+        Update-SingleView
+    }
+    Update-WorkflowState
+    if (Test-JobActive) { return }
+    if ($isBatch) { Update-BatchFooter }
+}
+
+function Update-SingleView {
+    # Until there is a preview to play - or one being made - the stage shows
+    # what is still needed rather than an empty black player.
+    $hasPreview = ($null -ne $PreviewMedia.Source)
+    $previewRendering = ($null -ne $script:RenderState) -and ([string]$script:RenderState.Kind -eq 'Preview')
+    $showPlayer = $hasPreview -or $previewRendering
+    $PlayerPanel.Visibility = ConvertTo-Visibility $showPlayer
+    $SingleEmptyPanel.Visibility = ConvertTo-Visibility (-not $showPlayer)
+
+    $row = Get-QueueRow -Id $script:QueuePreviewRowId
+    $fromQueue = ($null -ne $row) -and
+        [string]::Equals(([string]$row.ImageFolder).Trim(), $ImageFolderText.Text.Trim(), [StringComparison]::OrdinalIgnoreCase) -and
+        [string]::Equals(([string]$row.AudioPath).Trim(), $AudioText.Text.Trim(), [StringComparison]::OrdinalIgnoreCase)
+    if (-not $fromQueue) { $script:QueuePreviewRowId = '' }
+    $QueuePreviewBanner.Visibility = ConvertTo-Visibility $fromQueue
+    if ($fromQueue) {
+        $QueuePreviewBannerText.Text = "Previewing #$(Get-QueueRowNumber -Row $row)  $(Get-QueueRowTitle -Row $row)  from the batch queue. Motion, caption and backdrop changes made here apply to the whole batch."
+    }
+    Update-RecentSingleVideos
+}
+
+function Update-RecentSingleVideos {
+    $RecentSinglePanel.Children.Clear()
+    $entries = @($script:RenderHistory | Where-Object { [string]$_.Type -eq 'Final' } | Sort-Object StartedUtc -Descending | Select-Object -First 6)
+    $RecentSingleEmptyText.Visibility = ConvertTo-Visibility ($entries.Count -eq 0)
+    foreach ($entry in $entries) {
+        $started = try { ([DateTime]::Parse([string]$entry.StartedUtc).ToLocalTime()).ToString('d MMM, HH:mm') } catch { '' }
+        $title = [Windows.Controls.TextBlock]::new()
+        $title.Text = [string]$entry.Name
+        $title.FontSize = 12.5
+        $title.TextTrimming = 'CharacterEllipsis'
+        $detail = [Windows.Controls.TextBlock]::new()
+        $detail.Text = "$($entry.Status)   $started"
+        $detail.FontSize = 11
+        $detail.Foreground = $script:MutedBrush
+        $detail.Margin = [Windows.Thickness]::new(0, 2, 0, 0)
+        $stack = [Windows.Controls.StackPanel]::new()
+        [void]$stack.Children.Add($title)
+        [void]$stack.Children.Add($detail)
+        $button = [Windows.Controls.Button]::new()
+        $button.Style = $window.FindResource('ToolButtonStyle')
+        $button.Margin = [Windows.Thickness]::new(-8, 1, 0, 1)
+        $button.Content = $stack
+        $button.Tag = [string]$entry.OutputPath
+        $button.ToolTip = [string]$entry.OutputPath
+        $button.Add_Click({ param($sender, $eventArgs) Open-OutputInFolder -Path ([string]$sender.Tag) })
+        [void]$RecentSinglePanel.Children.Add($button)
+    }
+}
+
+function Start-QueueRowPreview {
+    # Opens a queued video in Single video, with the player, the storyboard and
+    # the caption handles, and renders its first minute. The timeline made for
+    # that preview is kept with the video, so the batch renders what was seen.
+    param([string]$Id)
+    if (Test-JobActive) { return }
+    $row = Get-QueueRow -Id $Id
+    if ($null -eq $row) { return }
+    Select-QueueRow -Id $Id
+    $ImageFolderText.Text = [string]$row.ImageFolder
+    $AudioText.Text = [string]$row.AudioPath
+    $WatermarkText.Text = [string]$row.WatermarkPath
+    $OutputText.Text = Get-QueueRowOutputPath -Row $row
+    $script:QueuePreviewRowId = [string]$row.Id
+    Set-AppMode 'Single'
+    Start-VideoRender 'Preview'
+    Update-SingleView
+}
+
+function Edit-QueueRowCaptions {
+    param([string]$Id)
+    if (Test-JobActive) { return }
+    $row = Get-QueueRow -Id $Id
+    if ($null -eq $row) { return }
+    if (-not (Test-VoiceoverFile ([string]$row.AudioPath))) {
+        Show-ErrorMessage 'Choose this video''s voiceover first.' 'Edit captions'
+        return
+    }
+    $cachePath = Get-CaptionCachePath -AudioPath ([string]$row.AudioPath) -DataRoot $script:DataRoot
+    if (Test-Path -LiteralPath $cachePath -PathType Leaf) {
+        Show-CaptionEditor -AudioPath ([string]$row.AudioPath)
+        return
+    }
+    $choice = [Windows.MessageBox]::Show($window,
+        "Captions for this voiceover have not been generated yet. Generate them now and open them to edit?`r`n`r`nThis runs on this computer and takes a few minutes.",
+        'Edit captions', [Windows.MessageBoxButton]::YesNo, [Windows.MessageBoxImage]::Question)
+    if ($choice -ne [Windows.MessageBoxResult]::Yes) { return }
+    $script:PendingCaptionEditorAudio = [string]$row.AudioPath
+    [void](Start-CaptionGeneration -Force $true -AudioPath ([string]$row.AudioPath))
+}
+
+# --- Keeping the queue between sessions ---------------------------------------
+
+function Save-QueueState {
+    try {
+        $items = @(foreach ($row in $script:QueueRows) {
+            [ordered]@{
+                Channel = [string]$row.Channel; Label = [string]$row.Label
+                ImageFolder = [string]$row.ImageFolder; AudioPath = [string]$row.AudioPath
+                WatermarkPath = [string]$row.WatermarkPath; OutputFolder = [string]$row.OutputFolder
+                Name = [string]$row.Name; ImageCount = [int]$row.ImageCount; Duration = [double]$row.Duration
+                Done = [bool]$row.Done; DoneOutput = [string]$row.DoneOutput
+            }
+        })
+        $json = if ($items.Count -eq 0) { '[]' } else { ConvertTo-Json -InputObject $items -Depth 4 }
+        [IO.File]::WriteAllText($script:QueueStatePath, $json, [Text.UTF8Encoding]::new($false))
+    }
+    catch { Write-ToolDiagnostic 'The batch queue could not be saved.' $_.Exception }
+}
+
+function Import-QueueState {
+    if (-not (Test-Path -LiteralPath $script:QueueStatePath -PathType Leaf)) { return }
+    try {
+        # Assigned directly, not wrapped in @(): Windows PowerShell 5.1 would
+        # otherwise keep the JSON array as one nested Object[].
+        $loaded = [IO.File]::ReadAllText($script:QueueStatePath, [Text.Encoding]::UTF8) | ConvertFrom-Json
+        foreach ($entry in $loaded) {
+            if ($null -eq $entry -or $null -eq $entry.PSObject.Properties['ImageFolder']) { continue }
+            $row = New-QueueRow -Channel ([string]$entry.Channel) -Label ([string]$entry.Label) -ImageFolder ([string]$entry.ImageFolder) `
+                -AudioPath ([string]$entry.AudioPath) -WatermarkPath ([string]$entry.WatermarkPath) -OutputFolder ([string]$entry.OutputFolder) `
+                -Name ([string]$entry.Name) -ImageCount ([int]$entry.ImageCount)
+            if ($null -ne $entry.PSObject.Properties['Duration']) { $row.Duration = [double]$entry.Duration }
+            if ($null -ne $entry.PSObject.Properties['Done']) { $row.Done = [bool]$entry.Done }
+            if ($null -ne $entry.PSObject.Properties['DoneOutput']) { $row.DoneOutput = [string]$entry.DoneOutput }
+            Add-QueueRow -Row $row -Deferred
+        }
+        Complete-QueueChange -Save $false
+    }
+    catch { Write-ToolDiagnostic 'The saved batch queue could not be loaded.' $_.Exception }
+}
+
+# --- Rendering the queue ------------------------------------------------------
+
+function Start-QueueRender {
+    # Turns every unfinished video into a saved project and hands them to the
+    # batch worker, the same path Render saved projects takes.
+    if (Test-JobActive) { return }
+    $pending = @($script:QueueRows | Where-Object { -not [bool]$_.Done })
+    if ($pending.Count -eq 0) {
+        $message = if ($script:QueueRows.Count -gt 0) { 'Every video in the queue is already finished. Clear finished, then scan or add the next videos.' } else { 'Scan your channels folder or add a video first.' }
+        Show-InfoMessage $message 'Nothing to render'
+        return
+    }
+    foreach ($row in $pending) { Update-QueueRowFiles -Row $row }
+    Update-QueueStatuses
+    $blocked = @($pending | Where-Object { $_.ProblemKind -ne 'ok' })
+    if ($blocked.Count -gt 0) {
+        $first = $blocked[0]
+        Set-ChannelFilter -Key '*'
+        Select-QueueRow -Id ([string]$first.Id)
+        $first.Visual.Border.BringIntoView()
+        $count = if ($blocked.Count -eq 1) { 'One video is' } else { "$($blocked.Count) videos are" }
+        Show-ErrorMessage "$count not ready to render yet. The first is #$(Get-QueueRowNumber -Row $first), $(Get-QueueRowTitle -Row $first):`r`n`r`n$($first.Problem)" 'Not ready to render'
+        Update-BatchFooter
+        return
+    }
+    try {
+        Assert-FFmpegAvailable
         $settings = Get-UiSettings
         # Reading a watermark costs an FFprobe launch, and a batch of fifty
         # videos sharing one watermark would otherwise pay for it fifty times.
         $checkedWatermarks = @{}
-        # Two rows writing one file would leave a video of the day missing, and
-        # the batch would only find out after rendering both of them.
-        $claimedOutputs = @{}
         $queueDirectory = Join-Path (Join-Path $script:DataRoot 'queue-projects') ([guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Path $queueDirectory -Force | Out-Null
         $projectPaths = [Collections.Generic.List[string]]::new()
-        for ($index = 0; $index -lt $rows.Count; $index++) {
-            $row = $rows[$index]; $label = [string]$row.TitleBlock.Text
-            $imageFolder = $row.ImageBox.Text.Trim(); $audio = $row.AudioBox.Text.Trim(); $output = $row.OutputBox.Text.Trim()
-            $watermark = $row.WatermarkBox.Text.Trim()
+        for ($index = 0; $index -lt $pending.Count; $index++) {
+            $row = $pending[$index]
+            $label = "#$(Get-QueueRowNumber -Row $row) $(Get-QueueRowTitle -Row $row)"
+            $StatusText.Text = "Checking video $($index + 1) of $($pending.Count): $(Get-QueueRowTitle -Row $row)"
+            $window.Dispatcher.Invoke([action]{}, [Windows.Threading.DispatcherPriority]::Background)
+            $imageFolder = ([string]$row.ImageFolder).Trim()
+            $audio = ([string]$row.AudioPath).Trim()
+            $watermark = ([string]$row.WatermarkPath).Trim()
+            $output = Get-QueueRowOutputPath -Row $row
             $outputFolder = [string]$row.OutputFolder
-            if (-not [string]::IsNullOrWhiteSpace($outputFolder)) {
-                # A scanned row's box holds its folder with the name typed after
-                # it. The row's own folder is created if it is missing; any other
-                # folder typed into the box has to exist already.
-                $resolved = Resolve-QueueOutputPath -Text $output -DefaultFolder $outputFolder
-                if ([string]::IsNullOrWhiteSpace($resolved)) { throw "$($label): type a name for this video after the folder in its Output name box." }
-                $resolvedFolder = Split-Path -Parent $resolved
-                if ([string]::Equals($resolvedFolder.TrimEnd('\'), $outputFolder.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase) -and -not (Test-Path -LiteralPath $resolvedFolder -PathType Container)) {
-                    New-Item -ItemType Directory -Path $resolvedFolder -Force | Out-Null
-                }
-                $output = $resolved
+            $resolvedFolder = Split-Path -Parent $output
+            # The row's own folder is created if it is missing; any other
+            # folder typed in front of the name has to exist already.
+            if (-not [string]::IsNullOrWhiteSpace($outputFolder) -and
+                [string]::Equals($resolvedFolder.TrimEnd('\'), $outputFolder.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase) -and
+                -not (Test-Path -LiteralPath $resolvedFolder -PathType Container)) {
+                New-Item -ItemType Directory -Path $resolvedFolder -Force | Out-Null
             }
-            if ([string]::IsNullOrWhiteSpace($watermark) -or -not (Test-Path -LiteralPath $watermark -PathType Leaf) -or @('.mov','.mp4') -notcontains [IO.Path]::GetExtension($watermark).ToLowerInvariant()) { throw "$($label): select a valid MOV or MP4 watermark." }
             if (-not $checkedWatermarks.ContainsKey($watermark)) {
                 if (-not (Test-VideoStream $watermark)) { throw "$($label): FFprobe could not read the selected watermark video." }
                 $checkedWatermarks[$watermark] = $true
             }
-            if ([string]::IsNullOrWhiteSpace($imageFolder) -or -not (Test-Path -LiteralPath $imageFolder -PathType Container)) { throw "$($label): select a valid images folder." }
-            if (-not (Test-VoiceoverFile $audio)) { throw "$($label): select a valid voiceover file (M4A, MP3, WAV, AAC, FLAC, OGG or OPUS)." }
-            if ([string]::IsNullOrWhiteSpace($output) -or [IO.Path]::GetExtension($output).ToLowerInvariant() -ne '.mp4') { throw "$($label): choose an output MP4 file." }
-            $outputDirectory = Split-Path -Parent $output
-            if ([string]::IsNullOrWhiteSpace($outputDirectory) -or -not (Test-Path -LiteralPath $outputDirectory -PathType Container)) { throw "$($label): the output folder does not exist." }
-            $outputKey = $output.ToLowerInvariant()
-            if ($claimedOutputs.ContainsKey($outputKey)) { throw "$($label) and $($claimedOutputs[$outputKey]) would both write:`r`n$output`r`n`r`nGive them different names." }
-            $claimedOutputs[$outputKey] = $label
+            if ([string]::IsNullOrWhiteSpace($resolvedFolder) -or -not (Test-Path -LiteralPath $resolvedFolder -PathType Container)) { throw "$($label): the output folder does not exist." }
             $images = @(Get-ValidatedImages $imageFolder)
             $duration = Get-MediaDurationSeconds -FfprobePath $script:FfprobePath -MediaPath $audio
-            $timeline = New-TimelinePlan -ImagePaths $images -AudioDurationSeconds $duration -MinimumDurationSeconds $settings.MinimumDuration -MaximumDurationSeconds $settings.MaximumDuration -Fps $script:DeliveryFps
-            $project = [ordered]@{ SchemaVersion=1; ImageFolder=$imageFolder; AudioPath=$audio; WatermarkPath=$watermark; OutputPath=$output; Settings=$settings; PlanSignature=(Get-PlanSignature -Images $images -Duration $duration -Settings $settings -AudioPath $audio); Timeline=$timeline }
+            $row.Duration = $duration
+            $signature = Get-PlanSignature -Images $images -Duration $duration -Settings $settings -AudioPath $audio
+            $timeline = $null
+            if ($null -ne $row.PreviewPlan -and [string]$row.PreviewPlanSignature -eq $signature) { $timeline = $row.PreviewPlan }
+            else {
+                $timeline = New-TimelinePlan -ImagePaths $images -AudioDurationSeconds $duration -MinimumDurationSeconds $settings.MinimumDuration -MaximumDurationSeconds $settings.MaximumDuration -Fps $script:DeliveryFps
+            }
+            $project = [ordered]@{ SchemaVersion = 1; ImageFolder = $imageFolder; AudioPath = $audio; WatermarkPath = $watermark; OutputPath = $output; Settings = $settings; PlanSignature = $signature; Timeline = $timeline }
             $projectPath = Join-Path $queueDirectory ('video-{0:D3}.svp.json' -f ($index + 1))
-            [IO.File]::WriteAllText($projectPath, ($project | ConvertTo-Json -Depth 12), [Text.UTF8Encoding]::new($false)); $projectPaths.Add($projectPath)
+            [IO.File]::WriteAllText($projectPath, ($project | ConvertTo-Json -Depth 12), [Text.UTF8Encoding]::new($false))
+            $projectPaths.Add($projectPath)
         }
+        Save-QueueState
         Start-BatchRender -ProjectPaths $projectPaths.ToArray()
     }
     catch {
         Write-ToolDiagnostic 'Bulk queue preparation failed.' $_.Exception
         Show-ErrorMessage $_.Exception.Message 'Could not build render queue'
+        Update-BatchFooter
     }
+}
+
+function New-RenderRowVisual {
+    # One line of the batch while it renders: its status, or its progress.
+    param([psobject]$Item)
+    $border = [Windows.Controls.Border]::new()
+    $border.BorderBrush = $script:RowLineBrush
+    $border.BorderThickness = [Windows.Thickness]::new(0, 0, 0, 1)
+    $border.Padding = [Windows.Thickness]::new(12, 0, 12, 0)
+    $border.Height = 50
+    $grid = [Windows.Controls.Grid]::new()
+    New-QueueColumns -Grid $grid -Widths @(30, -1, 140, 68, 210, 82)
+    $border.Child = $grid
+    $number = New-QueueCellText -Column 0 -Foreground $script:MutedBrush -FontSize 12
+    $number.Text = [string]($Item.Index + 1)
+    [void]$grid.Children.Add($number)
+    $title = New-QueueCellText -Column 1 -Foreground $script:TextBrush -FontSize 13
+    $title.Text = [string]$Item.Title
+    $title.ToolTip = [string]$Item.DestinationPath
+    $title.Margin = [Windows.Thickness]::new(0, 0, 10, 0)
+    [void]$grid.Children.Add($title)
+    $channel = New-QueueCellText -Column 2 -Foreground $script:DimBrush -FontSize 12
+    $channel.Text = if ([string]::IsNullOrWhiteSpace([string]$Item.Channel)) { '-' } else { [string]$Item.Channel }
+    $channel.Margin = [Windows.Thickness]::new(10, 0, 8, 0)
+    [void]$grid.Children.Add($channel)
+    $length = New-QueueCellText -Column 3 -Foreground $script:DimBrush -FontSize 12
+    $length.Text = if ([double]$Item.Duration -gt 0) { Format-Clock ([double]$Item.Duration) } else { '-' }
+    [void]$grid.Children.Add($length)
+
+    $statusHost = [Windows.Controls.Grid]::new()
+    $statusHost.VerticalAlignment = 'Center'
+    $statusHost.Margin = [Windows.Thickness]::new(0, 0, 14, 0)
+    [Windows.Controls.Grid]::SetColumn($statusHost, 4)
+    $pill = New-StatusPill
+    [void]$statusHost.Children.Add($pill.Border)
+    $progressHost = [Windows.Controls.StackPanel]::new()
+    $progressText = [Windows.Controls.TextBlock]::new()
+    $progressText.FontSize = 11.5
+    $progressText.Foreground = $script:AccentBrush
+    $progressBar = [Windows.Controls.ProgressBar]::new()
+    $progressBar.Minimum = 0
+    $progressBar.Maximum = 100
+    $progressBar.Height = 5
+    $progressBar.Margin = [Windows.Thickness]::new(0, 5, 0, 0)
+    [void]$progressHost.Children.Add($progressText)
+    [void]$progressHost.Children.Add($progressBar)
+    [void]$statusHost.Children.Add($progressHost)
+    [void]$grid.Children.Add($statusHost)
+
+    $open = [Windows.Controls.Button]::new()
+    $open.Style = $window.FindResource('QuietButtonStyle')
+    $open.Content = 'Open'
+    $open.Padding = [Windows.Thickness]::new(12, 4, 12, 4)
+    $open.HorizontalAlignment = 'Right'
+    $open.Tag = [string]$Item.DestinationPath
+    $open.ToolTip = 'Show the finished video in its folder'
+    $open.Add_Click({ param($sender, $eventArgs) Open-OutputInFolder -Path ([string]$sender.Tag) })
+    [Windows.Controls.Grid]::SetColumn($open, 5)
+    [void]$grid.Children.Add($open)
+
+    return [pscustomobject]@{ Border = $border; Pill = $pill; ProgressHost = $progressHost; ProgressText = $progressText; ProgressBar = $progressBar; OpenButton = $open }
+}
+
+function Update-RenderRowVisual {
+    param([psobject]$Item)
+    $visual = $Item.Visual
+    if ($null -eq $visual) { return }
+    $isRendering = ($Item.State -eq 'Rendering')
+    $visual.ProgressHost.Visibility = ConvertTo-Visibility $isRendering
+    $visual.Pill.Border.Visibility = ConvertTo-Visibility (-not $isRendering)
+    $visual.OpenButton.Visibility = ConvertTo-Visibility ($Item.State -eq 'Done')
+    $visual.Border.Background = if ($isRendering) { $script:RenderingRowBrush } else { $script:TransparentBrush }
+    switch ([string]$Item.State) {
+        'Rendering' {
+            $visual.ProgressBar.Value = [double]$Item.Percent
+            $visual.ProgressText.Text = if ([string]$Item.Stage -eq 'captions') { "Captions $([int][Math]::Floor([double]$Item.Percent))%" } else { "Rendering $([int][Math]::Floor([double]$Item.Percent))%" }
+        }
+        'Done' { Set-StatusPill -Pill $visual.Pill -Kind 'done' -Text 'Done' }
+        'Paused' { Set-StatusPill -Pill $visual.Pill -Kind 'warn' -Text 'Paused' }
+        'Failed' { Set-StatusPill -Pill $visual.Pill -Kind 'bad' -Text 'Failed' }
+        default { Set-StatusPill -Pill $visual.Pill -Kind 'queued' -Text 'Queued' }
+    }
+}
+
+function Show-BatchRun {
+    # The batch takes the queue's place until it is finished and looked at.
+    param([psobject]$Run)
+    $script:BatchRun = $Run
+    $RenderRowsPanel.Children.Clear()
+    foreach ($item in @($Run.Items)) {
+        $item.Visual = New-RenderRowVisual -Item $item
+        Update-RenderRowVisual -Item $item
+        [void]$RenderRowsPanel.Children.Add($item.Visual.Border)
+    }
+    $NowRenderingImage.Source = $null
+    $NowRenderingImageHint.Visibility = [Windows.Visibility]::Visible
+    $script:BatchSettingsSection = ''
+    if ($script:AppMode -ne 'Batch') { Set-AppMode 'Batch' }
+    Update-BatchNavHighlight
+    Update-QueueEditing
+    Update-BatchHeader
+    Update-BatchInspector
+    Update-BatchFooter
+}
+
+function Close-BatchRun {
+    # Back to the queue once the batch has been looked at.
+    $run = $script:BatchRun
+    if ($null -eq $run -or [bool]$run.Running) { return }
+    $script:BatchRun = $null
+    $RenderRowsPanel.Children.Clear()
+    Complete-QueueChange -Save $false
+    Update-BatchInspector
+}
+
+function Set-BatchItemDone {
+    param([psobject]$Item)
+    if ($Item.State -eq 'Done') { return }
+    $Item.State = 'Done'
+    $Item.Percent = 100.0
+    $script:FinalOutputPath = [string]$Item.DestinationPath
+    $row = Get-QueueRow -Id ([string]$Item.RowId)
+    if ($null -ne $row) {
+        $row.Done = $true
+        $row.DoneOutput = [string]$Item.DestinationPath
+    }
+}
+
+function Update-BatchRunProgress {
+    # The worker reports which video it is on and how far into it. Everything
+    # before that video is finished; everything after it is still waiting.
+    param([int]$ItemIndex, [double]$ItemPercent, [string]$Stage)
+    $run = $script:BatchRun
+    if ($null -eq $run -or $ItemIndex -lt 0) { return }
+    $items = @($run.Items)
+    $changed = $false
+    for ($index = 0; $index -lt $items.Count; $index++) {
+        $item = $items[$index]
+        $before = "$($item.State)|$($item.Percent)|$($item.Stage)"
+        if ($index -lt $ItemIndex -or ($index -eq $ItemIndex -and $Stage -eq 'done')) { Set-BatchItemDone -Item $item }
+        elseif ($index -eq $ItemIndex) {
+            $item.State = 'Rendering'
+            $item.Percent = [Math]::Max(0.0, [Math]::Min(100.0, $ItemPercent))
+            $item.Stage = $Stage
+        }
+        elseif ($item.State -ne 'Queued') { $item.State = 'Queued' }
+        if ($before -ne "$($item.State)|$($item.Percent)|$($item.Stage)") {
+            Update-RenderRowVisual -Item $item
+            $changed = $true
+        }
+    }
+    if ($changed) { Update-BatchHeader }
+}
+
+function Read-BatchProgress {
+    param([string]$Path)
+    $result = [pscustomobject]@{ Percent = 0.0; Message = 'Starting the batch...'; Item = -1; ItemPercent = 0.0; Stage = '' }
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $result }
+    try {
+        $text = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
+        $culture = [Globalization.CultureInfo]::InvariantCulture
+        $match = [regex]::Match($text, '(?m)^percent=([0-9.]+)')
+        if ($match.Success) { $result.Percent = [double]::Parse($match.Groups[1].Value, $culture) }
+        $match = [regex]::Match($text, '(?m)^message=(.*)$')
+        if ($match.Success) { $result.Message = $match.Groups[1].Value.Trim() }
+        $match = [regex]::Match($text, '(?m)^item=(\d+)')
+        if ($match.Success) { $result.Item = [int]$match.Groups[1].Value }
+        $match = [regex]::Match($text, '(?m)^itempercent=([0-9.]+)')
+        if ($match.Success) { $result.ItemPercent = [double]::Parse($match.Groups[1].Value, $culture) }
+        $match = [regex]::Match($text, '(?m)^stage=(.*)$')
+        if ($match.Success) { $result.Stage = $match.Groups[1].Value.Trim() }
+    }
+    catch {}
+    return $result
+}
+
+function Get-BatchSecondsDone {
+    # Seconds of video finished so far: whole videos before the current one,
+    # and the rendered part of the current one. Captions take time but make
+    # no video, so they count for nothing here.
+    $state = $script:RenderState
+    if ($null -eq $state -or -not $state.PSObject.Properties['ItemDurations']) { return 0.0 }
+    $durations = @($state.ItemDurations)
+    $current = [int]$state.CurrentItem
+    $done = 0.0
+    for ($index = 0; $index -lt $durations.Count -and $index -lt $current; $index++) { $done += [double]$durations[$index] }
+    if ($current -ge 0 -and $current -lt $durations.Count) {
+        if ([string]$state.Stage -eq 'done') { $done += [double]$durations[$current] }
+        elseif ([string]$state.Stage -eq 'rendering') { $done += [double]$durations[$current] * ([double]$state.ItemPercent / 100.0) }
+    }
+    return $done
+}
+
+function Format-ElapsedTime {
+    param([double]$Seconds)
+    if ($Seconds -lt 60) { return 'under 1 min' }
+    $totalMinutes = [int][Math]::Floor($Seconds / 60.0)
+    $hours = [int][Math]::Floor($totalMinutes / 60)
+    if ($hours -gt 0) { return ('{0} h {1:00} min' -f $hours, ($totalMinutes - ($hours * 60))) }
+    return "$totalMinutes min"
+}
+
+function Update-NowRenderingPanel {
+    $state = $script:RenderState
+    $run = $script:BatchRun
+    if ($null -eq $run) { return }
+    $items = @($run.Items)
+    if ($null -eq $state -or [string]$state.Kind -ne 'Batch') {
+        $NowRenderingLabel.Text = 'BATCH'
+        $NowRenderingTitleText.Text = [string]$run.ResultText
+        $NowSpeedText.Text = if ([double]$run.MeasuredSpeed -gt 0) { '{0:0.0}x' -f [double]$run.MeasuredSpeed } else { '-' }
+        $NowVideoPercentText.Text = '-'
+        $NowRenderingStageText.Text = ''
+        return
+    }
+    $current = [int]$state.CurrentItem
+    $NowRenderingLabel.Text = if ($current -ge 0 -and $items.Count -gt 0) { "NOW RENDERING  -  VIDEO $([Math]::Min($current + 1, $items.Count)) OF $($items.Count)" } else { 'NOW RENDERING' }
+    if ($current -ge 0 -and $current -lt $items.Count) { $NowRenderingTitleText.Text = [string]$items[$current].Title }
+    $elapsed = ([DateTime]::UtcNow - [DateTime]$state.StartedUtc).TotalSeconds
+    $NowElapsedText.Text = Format-ElapsedTime $elapsed
+    $NowEncoderText.Text = [string]$state.Encoder
+    $NowEncoderText.ToolTip = [string]$state.Encoder
+    $done = Get-BatchSecondsDone
+    $NowSpeedText.Text = if ($done -gt 1 -and $elapsed -ge 20) { '{0:0.0}x' -f ($done / $elapsed) } else { 'measuring' }
+    $NowVideoPercentText.Text = switch ([string]$state.Stage) {
+        'captions' { "Captions $([int][Math]::Floor([double]$state.ItemPercent))%" }
+        'rendering' { "$([int][Math]::Floor([double]$state.ItemPercent))%" }
+        'done' { '100%' }
+        default { 'starting' }
+    }
+    $NowRenderingStageText.Text = [string]$state.Message
+    Update-NowRenderingThumbnail
+}
+
+function Update-NowRenderingThumbnail {
+    # A frame from the end of the newest finished stretch of the video being
+    # rendered, taken by FFmpeg in the background every few seconds when a new
+    # stretch is done. Unfinished stretches are left alone: an MP4 is not
+    # readable until FFmpeg has closed it.
+    $state = $script:RenderState
+    $run = $script:BatchRun
+    if ($null -eq $state -or $null -eq $run -or [string]$state.Kind -ne 'Batch') { return }
+    $items = @($run.Items)
+    $current = [int]$state.CurrentItem
+    if ($current -lt 0 -or $current -ge $items.Count) { return }
+    $thumb = $script:NowRenderingThumb
+    if ($null -ne $thumb -and [int]$thumb.ItemIndex -ne $current) {
+        # A new video: its first frame comes once its first stretch is done.
+        $NowRenderingImage.Source = $null
+        $NowRenderingImageHint.Visibility = [Windows.Visibility]::Visible
+    }
+    if ($null -ne $thumb -and $null -ne $thumb.Process) {
+        if (-not $thumb.Process.HasExited) { return }
+        $thumb.Process = $null
+        if ([int]$thumb.ItemIndex -eq $current -and (Test-Path -LiteralPath ([string]$thumb.OutputPath) -PathType Leaf)) {
+            try {
+                $bitmap = [Windows.Media.Imaging.BitmapImage]::new()
+                $bitmap.BeginInit()
+                $bitmap.CacheOption = [Windows.Media.Imaging.BitmapCacheOption]::OnLoad
+                $bitmap.UriSource = [uri]([string]$thumb.OutputPath)
+                $bitmap.EndInit()
+                $bitmap.Freeze()
+                $NowRenderingImage.Source = $bitmap
+                $NowRenderingImageHint.Visibility = [Windows.Visibility]::Collapsed
+            }
+            catch {}
+        }
+        Remove-Item -LiteralPath ([string]$thumb.OutputPath) -Force -ErrorAction SilentlyContinue
+    }
+    if ($null -ne $thumb -and [int]$thumb.ItemIndex -eq $current -and ([DateTime]::UtcNow - [DateTime]$thumb.CheckedUtc).TotalSeconds -lt 4) { return }
+    $directory = [string]$items[$current].ResumeDirectory
+    $segment = ''
+    if (-not [string]::IsNullOrWhiteSpace($directory) -and (Test-Path -LiteralPath $directory -PathType Container)) {
+        $progressFiles = @(Get-ChildItem -LiteralPath $directory -Filter 'progress-*.txt' -File -ErrorAction SilentlyContinue | Sort-Object Name -Descending)
+        foreach ($file in $progressFiles) {
+            $text = ''
+            try { $text = [IO.File]::ReadAllText($file.FullName) } catch { continue }
+            if ($text -notmatch 'progress=end') { continue }
+            $candidate = Join-Path $directory (($file.BaseName -replace '^progress-', 'segment-') + '.mp4')
+            if (Test-Path -LiteralPath $candidate -PathType Leaf) { $segment = $candidate; break }
+        }
+    }
+    $previousSegment = if ($null -ne $thumb -and [int]$thumb.ItemIndex -eq $current) { [string]$thumb.Segment } else { '' }
+    $script:NowRenderingThumb = [pscustomobject]@{ ItemIndex = $current; CheckedUtc = [DateTime]::UtcNow; Segment = $previousSegment; Process = $null; OutputPath = '' }
+    if ([string]::IsNullOrWhiteSpace($segment) -or $segment -eq $previousSegment -or [string]::IsNullOrWhiteSpace([string]$script:FfmpegPath)) { return }
+    $outputPath = Join-Path $script:DataRoot ('now-rendering-{0}.jpg' -f [guid]::NewGuid().ToString('N').Substring(0, 8))
+    try {
+        $arguments = Join-ProcessArguments @('-y', '-hide_banner', '-loglevel', 'error', '-sseof', '-1', '-i', $segment, '-frames:v', '1', '-vf', 'scale=480:-2', $outputPath)
+        $process = Start-Process -FilePath $script:FfmpegPath -ArgumentList $arguments -PassThru -WindowStyle Hidden
+        $script:NowRenderingThumb.Process = $process
+        $script:NowRenderingThumb.OutputPath = $outputPath
+        $script:NowRenderingThumb.Segment = $segment
+    }
+    catch { Write-ToolDiagnostic 'The rendering thumbnail could not be taken.' $_.Exception }
 }
 
 function Start-BatchRender {
@@ -4353,6 +6115,7 @@ function Start-BatchRender {
         $batchDirectory = Join-Path $script:DataRoot "batch-$batchId"
         New-Item -ItemType Directory -Path $batchDirectory -Force | Out-Null
         $prepared = [Collections.Generic.List[object]]::new()
+        $displayItems = [Collections.Generic.List[object]]::new()
         $existingOutputs = [Collections.Generic.List[string]]::new()
 
         for ($index = 0; $index -lt $projectPaths.Count; $index++) {
@@ -4451,12 +6214,43 @@ function Start-BatchRender {
             }
             [IO.File]::WriteAllText($renderJobPath, ($renderJob | ConvertTo-Json -Depth 15), [Text.UTF8Encoding]::new($false))
             $prepared.Add([pscustomobject]@{ RenderJobPath = $renderJobPath; CaptionJobPath = $captionJobPath; DestinationPath = $destination })
+            # What the window shows for this video while the batch runs. Its
+            # resume folder is where its finished stretches appear, which is
+            # what the rendering thumbnail is taken from.
+            $displayItems.Add([pscustomobject]@{
+                Index = $index
+                Title = [IO.Path]::GetFileNameWithoutExtension($destination)
+                Channel = ''
+                Duration = [double]$project.Timeline.AudioDurationSeconds
+                DestinationPath = $destination
+                ResumeDirectory = $resumeDirectory
+                RowId = ''
+                State = 'Queued'
+                Percent = 0.0
+                Stage = ''
+                Visual = $null
+            })
+        }
+        # A video that came from the queue is matched back to its line there by
+        # the file it writes, which also covers a batch resumed from history.
+        foreach ($displayItem in $displayItems) {
+            foreach ($queueRow in $script:QueueRows) {
+                if ([bool]$queueRow.Done) { continue }
+                if ([string]::Equals((Get-QueueRowOutputPath -Row $queueRow), [string]$displayItem.DestinationPath, [StringComparison]::OrdinalIgnoreCase)) {
+                    $displayItem.RowId = [string]$queueRow.Id
+                    $displayItem.Channel = [string]$queueRow.Channel
+                    $displayItem.Title = Get-QueueRowTitle -Row $queueRow
+                    break
+                }
+            }
         }
 
         if ($existingOutputs.Count -gt 0) {
             $choice = [Windows.MessageBox]::Show($window, "$($existingOutputs.Count) batch output file(s) already exist. Replace each only after its new render succeeds?", 'Confirm batch replacement', [Windows.MessageBoxButton]::YesNo, [Windows.MessageBoxImage]::Warning)
             if ($choice -ne [Windows.MessageBoxResult]::Yes) {
                 Remove-CaptionRunDirectory $batchDirectory
+                $StatusText.Text = 'Batch not started.'
+                Update-BatchFooter
                 return
             }
         }
@@ -4500,11 +6294,30 @@ function Start-BatchRender {
             StagingPath = ''
             DestinationPath = [string]$prepared[$prepared.Count - 1].DestinationPath
             OutputPaths = @($prepared | ForEach-Object { $_.DestinationPath })
-            DurationSeconds = 1.0
+            # Seconds of video in each project, so progress, speed and the
+            # finish time are weighed by how long each video is rather than
+            # counting a two-minute video the same as a twenty-minute one.
+            ItemDurations = @($displayItems | ForEach-Object { [double]$_.Duration })
+            DurationSeconds = [double](@($displayItems | ForEach-Object { [double]$_.Duration }) | Measure-Object -Sum).Sum
+            CurrentItem = 0
+            ItemPercent = 0.0
+            Stage = ''
+            Message = ''
+            MotionQuality = Get-ComboText $MotionQualityCombo
             Encoder = $encoder
             FilterBackend = if ($null -eq $script:FilterBackend) { 'cpu' } else { [string]$script:FilterBackend }
             HistoryId = $HistoryId
         }
+        $script:NowRenderingThumb = $null
+        Show-BatchRun -Run ([pscustomobject]@{
+            Items = $displayItems.ToArray()
+            ProjectPaths = @($projectPaths)
+            HistoryId = $HistoryId
+            Running = $true
+            Result = ''
+            ResultText = ''
+            MeasuredSpeed = 0.0
+        })
         $RenderProgress.Value = 0
         $script:LastHistoryProgressBucket = -1
         Set-RenderControls $true
@@ -4514,6 +6327,10 @@ function Start-BatchRender {
     }
     catch {
         Write-ToolDiagnostic 'Batch preparation failed.' $_.Exception
+        if ($null -ne $script:BatchRun -and [bool]$script:BatchRun.Running) {
+            $script:BatchRun = $null
+            $RenderRowsPanel.Children.Clear()
+        }
         if ($null -ne $script:RenderState -and $script:RenderState.PSObject.Properties['HistoryId']) { Update-RenderHistoryEntry -Id ([string]$script:RenderState.HistoryId) -Status 'Failed' -Progress 0 -Detail $_.Exception.Message }
         if ($null -ne $script:RenderState) { Remove-RenderArtifacts -State $script:RenderState }
         elseif (-not [string]::IsNullOrWhiteSpace($batchDirectory)) { Remove-CaptionRunDirectory $batchDirectory }
@@ -4527,29 +6344,55 @@ function Start-BatchRender {
 function Complete-BatchRender {
     $state = $script:RenderState
     $process = $script:RenderProcess
+    $result = 'Failed'
+    $resultText = ''
     try {
         $renderTimer.Stop()
         $process.WaitForExit(); $process.Refresh()
+        # The last progress the worker wrote says which video it reached, so
+        # every video before it is known to be finished whatever happened next.
+        $lastProgress = Read-BatchProgress $state.ProgressPath
+        if ($lastProgress.Item -ge 0) { Update-BatchRunProgress -ItemIndex $lastProgress.Item -ItemPercent $lastProgress.ItemPercent -Stage $lastProgress.Stage }
         if ($script:CancelRequested) {
             Update-RenderHistoryEntry -Id ([string]$state.HistoryId) -Status 'Paused' -Progress ([int]$RenderProgress.Value) -Detail 'Batch paused by the user; completed videos and segments were kept.'
             $StatusText.Text = 'Batch paused. Finished videos and resumable segments were kept.'
-            return
+            $result = 'Paused'
+            $resultText = 'Batch paused. Finished videos and finished stretches were kept; Resume carries on from there.'
         }
-        if ($process.ExitCode -ne 0) {
-            $details = 'The batch worker stopped before all projects completed.'
-            if (Test-Path -LiteralPath $state.ErrorPath -PathType Leaf) {
-                $raw = Get-Content -LiteralPath $state.ErrorPath -Raw -ErrorAction SilentlyContinue
-                # The worker's stack is kept in the log for diagnosis, below a
-                # marker; the person is shown what went wrong, not where.
-                if (-not [string]::IsNullOrWhiteSpace($raw)) { $details = ($raw -split '(?m)^--- worker stack ---')[0].Trim() }
+        else {
+            if ($process.ExitCode -ne 0) {
+                $details = 'The batch worker stopped before all projects completed.'
+                if (Test-Path -LiteralPath $state.ErrorPath -PathType Leaf) {
+                    $raw = Get-Content -LiteralPath $state.ErrorPath -Raw -ErrorAction SilentlyContinue
+                    # The worker's stack is kept in the log for diagnosis, below a
+                    # marker; the person is shown what went wrong, not where.
+                    if (-not [string]::IsNullOrWhiteSpace($raw)) { $details = ($raw -split '(?m)^--- worker stack ---')[0].Trim() }
+                }
+                throw $details
             }
-            throw $details
+            $RenderProgress.Value = 100
+            $script:FinalOutputPath = $state.DestinationPath
+            $OpenFolderButton.IsEnabled = $true
+            Update-RenderHistoryEntry -Id ([string]$state.HistoryId) -Status 'Completed' -Progress 100 -Detail "Completed $(@($state.OutputPaths).Count) videos."
+            $StatusText.Text = "Batch completed: $(@($state.OutputPaths).Count) videos."
+            $result = 'Completed'
+            $resultText = "Batch completed: $(@($state.OutputPaths).Count) videos."
+            if ($null -ne $script:BatchRun) {
+                foreach ($item in @($script:BatchRun.Items)) { Set-BatchItemDone -Item $item; Update-RenderRowVisual -Item $item }
+            }
+            # How fast this computer really renders, for the next estimate. A
+            # short run, or one that mostly reused finished stretches, says
+            # little about that, so only a batch of some length counts.
+            $elapsed = ([DateTime]::UtcNow - [DateTime]$state.StartedUtc).TotalSeconds
+            $videoSeconds = [double]$state.DurationSeconds
+            if ($elapsed -ge 300 -and $videoSeconds -gt 0) {
+                $measured = $videoSeconds / $elapsed
+                $quality = [string]$state.MotionQuality
+                $previous = if ($script:RenderSpeeds.ContainsKey($quality)) { [double]$script:RenderSpeeds[$quality] } else { 0.0 }
+                $script:RenderSpeeds[$quality] = if ($previous -gt 0) { ($previous + $measured) / 2.0 } else { $measured }
+                if ($null -ne $script:BatchRun) { $script:BatchRun.MeasuredSpeed = $measured }
+            }
         }
-        $RenderProgress.Value = 100
-        $script:FinalOutputPath = $state.DestinationPath
-        $OpenFolderButton.IsEnabled = $true
-        Update-RenderHistoryEntry -Id ([string]$state.HistoryId) -Status 'Completed' -Progress 100 -Detail "Completed $(@($state.OutputPaths).Count) videos."
-        $StatusText.Text = "Batch completed: $(@($state.OutputPaths).Count) videos."
     }
     catch {
         Write-ToolDiagnostic 'Batch rendering failed.' $_.Exception
@@ -4560,13 +6403,35 @@ function Complete-BatchRender {
         }
         if ($null -ne $state -and $state.PSObject.Properties['HistoryId']) { Update-RenderHistoryEntry -Id ([string]$state.HistoryId) -Status 'Failed' -Progress ([int]$RenderProgress.Value) -Detail $_.Exception.Message }
         Show-ErrorMessage "$($_.Exception.Message)`r`n`r`nCompleted videos and resumable segments were kept." 'Batch rendering stopped'
-        $StatusText.Text = 'Batch stopped. You can select the same projects again to resume.'
+        $StatusText.Text = 'Batch stopped. Resume carries on from the video that stopped.'
+        $result = 'Failed'
+        $resultText = 'Batch stopped. Finished videos were kept; Resume carries on from the video that stopped.'
     }
     finally {
         if ($null -ne $state) { Remove-RenderArtifacts -State $state -KeepErrorLog ($process.ExitCode -ne 0) }
+        $thumb = $script:NowRenderingThumb
+        if ($null -ne $thumb -and -not [string]::IsNullOrWhiteSpace([string]$thumb.OutputPath)) { Remove-Item -LiteralPath ([string]$thumb.OutputPath) -Force -ErrorAction SilentlyContinue }
+        $script:NowRenderingThumb = $null
+        $run = $script:BatchRun
+        if ($null -ne $run) {
+            $run.Running = $false
+            $run.Result = $result
+            $run.ResultText = $resultText
+            # The video that was being rendered when the batch stopped.
+            foreach ($item in @($run.Items)) {
+                if ($item.State -eq 'Rendering') {
+                    $item.State = if ($result -eq 'Paused') { 'Paused' } else { 'Failed' }
+                    Update-RenderRowVisual -Item $item
+                }
+            }
+        }
         $script:RenderProcess = $null
         $script:RenderState = $null
+        Save-QueueState
+        Save-UserSettings
         Set-RenderControls $false
+        Update-BatchHeader
+        Update-NowRenderingPanel
     }
 }
 
@@ -4926,6 +6791,15 @@ function Complete-VideoRender {
             $PreviewMedia.Position = [TimeSpan]::Zero
             $script:PreviewFingerprint = $state.Fingerprint
             $script:PreviewValid = $true
+            # A video opened from the queue keeps the timeline this preview was
+            # made with, so the batch renders exactly what was watched here.
+            $queueRow = Get-QueueRow -Id $script:QueuePreviewRowId
+            if ($null -ne $queueRow -and
+                [string]::Equals(([string]$queueRow.ImageFolder).Trim(), $ImageFolderText.Text.Trim(), [StringComparison]::OrdinalIgnoreCase) -and
+                [string]::Equals(([string]$queueRow.AudioPath).Trim(), $AudioText.Text.Trim(), [StringComparison]::OrdinalIgnoreCase)) {
+                $queueRow.PreviewPlan = $script:CurrentPlan
+                $queueRow.PreviewPlanSignature = [string]$script:PlanSignature
+            }
             $script:LiveCaptionCacheSignature = ''
             Refresh-LiveCaptionEntries
             Update-LiveCaptionText
@@ -4947,6 +6821,17 @@ function Complete-VideoRender {
             }
             $script:FinalOutputPath = $state.DestinationPath
             $OpenFolderButton.IsEnabled = $true
+            # A queued video rendered on its own here is finished in the queue
+            # too, so Render all does not make it a second time.
+            $finishedInQueue = $false
+            foreach ($queueRow in $script:QueueRows) {
+                if (-not [bool]$queueRow.Done -and [string]::Equals((Get-QueueRowOutputPath -Row $queueRow), [string]$state.DestinationPath, [StringComparison]::OrdinalIgnoreCase)) {
+                    $queueRow.Done = $true
+                    $queueRow.DoneOutput = [string]$state.DestinationPath
+                    $finishedInQueue = $true
+                }
+            }
+            if ($finishedInQueue) { Complete-QueueChange }
             if ($state.PSObject.Properties['HistoryId']) { Update-RenderHistoryEntry -Id ([string]$state.HistoryId) -Status 'Completed' -Progress 100 -Detail 'Final video completed successfully.' }
             $StatusText.Text = "Final video completed: $($state.DestinationPath)"
             Write-ToolDiagnostic "Final output finalized at $($state.DestinationPath)"
@@ -5179,6 +7064,26 @@ function Update-RenderEta {
     if (-not $script:RenderState.PSObject.Properties['StartedUtc']) { return }
 
     $elapsed = ([DateTime]::UtcNow - [DateTime]$script:RenderState.StartedUtc).TotalSeconds
+    if ([string]$script:RenderState.Kind -eq 'Batch' -and $script:RenderState.PSObject.Properties['ItemDurations']) {
+        # A batch is weighed by seconds of video, not by count of videos:
+        # after two short videos of ten, a fifth of the batch is not done.
+        $total = [double]$script:RenderState.DurationSeconds
+        $done = Get-BatchSecondsDone
+        $batchDetail = @("$([int][Math]::Floor($Percent))% of the batch")
+        if ($total -le 0 -or $done -le 1 -or $elapsed -lt 20) {
+            $RenderEtaText.Text = 'estimating...'
+        }
+        else {
+            $speed = $done / $elapsed
+            $remaining = [Math]::Max(0.0, ($total - $done) / $speed)
+            $finish = [DateTime]::Now.AddSeconds($remaining)
+            $RenderEtaText.Text = "$(Format-LongDuration $remaining) left, finishes $($finish.ToString('HH:mm'))"
+            $batchDetail += ('{0:0.0}x real time' -f $speed)
+        }
+        if ($script:RenderState.PSObject.Properties['Encoder']) { $batchDetail += [string]$script:RenderState.Encoder }
+        $RenderDetailText.Text = $batchDetail -join '  |  '
+        return
+    }
     # Below a few percent the rate is dominated by start-up, and an estimate
     # made from it would swing wildly and then settle. Better to say nothing.
     if ($Percent -lt 3.0 -or $elapsed -lt 5.0) {
@@ -5218,7 +7123,31 @@ $renderTimer.Add_Tick({
             $percentage = [Math]::Min(99.5, [Math]::Max(0, $captionProgress.Percent))
             $RenderProgress.Value = $percentage
             $StatusText.Text = $captionProgress.Message
-            $CaptionStatusText.Text = "$($captionProgress.Message) ($([Math]::Floor($percentage))%)"
+            if (-not $script:RenderState.PSObject.Properties['IsSingleVoiceover'] -or [bool]$script:RenderState.IsSingleVoiceover) {
+                $CaptionStatusText.Text = "$($captionProgress.Message) ($([Math]::Floor($percentage))%)"
+            }
+        }
+        elseif ($script:RenderState.Kind -eq 'Batch') {
+            # Which video the worker is on and how far into it, for the table,
+            # the panel beside it and the finish time.
+            $batchProgress = Read-BatchProgress $script:RenderState.ProgressPath
+            $percentage = [Math]::Min(99.5, [Math]::Max(0, $batchProgress.Percent))
+            $RenderProgress.Value = $percentage
+            if ($batchProgress.Item -ge 0) {
+                $script:RenderState.CurrentItem = $batchProgress.Item
+                $script:RenderState.ItemPercent = $batchProgress.ItemPercent
+                $script:RenderState.Stage = $batchProgress.Stage
+                Update-BatchRunProgress -ItemIndex $batchProgress.Item -ItemPercent $batchProgress.ItemPercent -Stage $batchProgress.Stage
+            }
+            $script:RenderState.Message = $batchProgress.Message
+            $items = if ($null -ne $script:BatchRun) { @($script:BatchRun.Items) } else { @() }
+            $current = [int]$script:RenderState.CurrentItem
+            if ($script:CancelRequested) { $StatusText.Text = 'Pausing the batch...' }
+            elseif ($items.Count -gt 0 -and $current -ge 0 -and $current -lt $items.Count) {
+                $StatusText.Text = "Video $($current + 1) of $($items.Count)  -  $($items[$current].Title)"
+            }
+            else { $StatusText.Text = "$($batchProgress.Message) ($([Math]::Floor($percentage))%)" }
+            Update-NowRenderingPanel
         }
         elseif ($script:RenderState.PSObject.Properties['IsWorker'] -and [bool]$script:RenderState.IsWorker) {
             $workerProgress = Read-CaptionProgress $script:RenderState.ProgressPath
@@ -5433,8 +7362,109 @@ $OpenFolderButton.Add_Click({
 })
 $SaveProjectButton.Add_Click({ Save-Project })
 $OpenProjectButton.Add_Click({ Open-Project })
-$BatchButton.Add_Click({ Show-BulkQueueBuilder })
 $RenderHistoryButton.Add_Click({ Show-RenderHistory })
+
+# --- Batch and Single video ---------------------------------------------------
+
+$ModeBatchButton.Add_Click({ Set-AppMode 'Batch' })
+$ModeSingleButton.Add_Click({ Set-AppMode 'Single' })
+$ScanChannelsButton.Add_Click({ Invoke-ChannelScan })
+$EmptyScanButton.Add_Click({ Invoke-ChannelScan })
+$AddVideoButton.Add_Click({ Add-QueueVideoByHand })
+$EmptyAddButton.Add_Click({ Add-QueueVideoByHand })
+$SavedProjectsButton.Add_Click({ Start-BatchRender })
+$ClearFinishedButton.Add_Click({ Clear-FinishedQueueRows })
+$ShowQueueButton.Add_Click({ Close-BatchRun })
+$ScanSkippedButton.Add_Click({ Show-ScanSkipped })
+$RenderAllButton.Add_Click({ Start-QueueRender })
+$BatchPauseButton.Add_Click({
+    if ($null -ne $script:RenderProcess -and -not $script:RenderProcess.HasExited) {
+        $script:CancelRequested = $true
+        $BatchPauseButton.IsEnabled = $false
+        $StatusText.Text = 'Pausing the batch...'
+        Stop-RenderProcessTree
+    }
+})
+$BatchResumeButton.Add_Click({
+    $run = $script:BatchRun
+    if ($null -eq $run -or [bool]$run.Running) { return }
+    Start-BatchRender -ProjectPaths @($run.ProjectPaths) -HistoryId ([string]$run.HistoryId)
+})
+$BatchOpenFolderButton.Add_Click({ Open-OutputInFolder -Path ([string]$script:FinalOutputPath) })
+$BrowseBatchWatermarkButton.Add_Click({
+    $selected = Select-OpenFile -Title 'Select watermark video' -Filter 'Video files (*.mov;*.mp4)|*.mov;*.mp4' -InitialPath $BatchWatermarkText.Text
+    if ($selected) { $BatchWatermarkText.Text = $selected }
+})
+$BatchNavMotionButton.Add_Click({ Show-BatchSettings 'Motion' })
+$BatchNavCaptionsButton.Add_Click({ Show-BatchSettings 'Captions' })
+$BatchNavBlankingButton.Add_Click({ Show-BatchSettings 'Blanking' })
+$BatchNavExportButton.Add_Click({ Show-BatchSettings 'Export' })
+$SettingsBackButton.Add_Click({ Hide-BatchSettings })
+
+$SelectedPreviewButton.Add_Click({ Start-QueueRowPreview -Id $script:SelectedQueueRowId })
+$SelectedCaptionsButton.Add_Click({ Edit-QueueRowCaptions -Id $script:SelectedQueueRowId })
+$SelectedRemoveButton.Add_Click({ Remove-QueueRow -Id $script:SelectedQueueRowId })
+$SelectedNameText.Add_TextChanged({
+    if ($script:IsFillingInspector) { return }
+    $row = Get-SelectedQueueRow
+    # The table's box carries the name; changing it there updates everything else.
+    if ($null -ne $row -and $null -ne $row.Visual -and $row.Visual.NameBox.Text -ne $SelectedNameText.Text) { $row.Visual.NameBox.Text = $SelectedNameText.Text }
+})
+$SelectedOutputFolderText.Add_TextChanged({ Set-SelectedQueueRowPath -Field 'OutputFolder' -Value $SelectedOutputFolderText.Text })
+$SelectedImagesText.Add_TextChanged({ Set-SelectedQueueRowPath -Field 'ImageFolder' -Value $SelectedImagesText.Text })
+$SelectedAudioText.Add_TextChanged({ Set-SelectedQueueRowPath -Field 'AudioPath' -Value $SelectedAudioText.Text })
+$SelectedWatermarkText.Add_TextChanged({ Set-SelectedQueueRowPath -Field 'WatermarkPath' -Value $SelectedWatermarkText.Text })
+$SelectedOutputBrowseButton.Add_Click({
+    $selected = Select-Folder -Description 'Select the folder this video is saved in' -InitialPath $SelectedOutputFolderText.Text
+    if ($selected) { $SelectedOutputFolderText.Text = $selected; Save-QueueState }
+})
+$SelectedImagesBrowseButton.Add_Click({
+    $selected = Select-Folder -Description 'Select this video''s images folder' -InitialPath $SelectedImagesText.Text
+    if ($selected) { $SelectedImagesText.Text = $selected; Save-QueueState }
+})
+$SelectedAudioBrowseButton.Add_Click({
+    $selected = Select-OpenFile -Title 'Select voiceover' -Filter $script:VoiceoverFilter -InitialPath $SelectedAudioText.Text
+    if ($selected) { $SelectedAudioText.Text = $selected; Save-QueueState }
+})
+$SelectedWatermarkBrowseButton.Add_Click({
+    $selected = Select-OpenFile -Title 'Select watermark video' -Filter 'Video files (*.mov;*.mp4)|*.mov;*.mp4' -InitialPath $SelectedWatermarkText.Text
+    if ($selected) { $SelectedWatermarkText.Text = $selected; Save-QueueState }
+})
+
+$BackToQueueButton.Add_Click({
+    $rowId = $script:QueuePreviewRowId
+    Set-AppMode 'Batch'
+    if (-not [string]::IsNullOrWhiteSpace($rowId) -and $null -eq $script:BatchRun) { Select-QueueRow -Id $rowId }
+})
+$EmptyPreviewButton.Add_Click({ Start-VideoRender 'Preview' })
+# The tiles stand in for the Source section until there is a preview, so
+# their Browse buttons are that section's own.
+$SingleTileImagesButton.Add_Click({ $BrowseImagesButton.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Primitives.ButtonBase]::ClickEvent)) })
+$SingleTileAudioButton.Add_Click({ $BrowseAudioButton.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Primitives.ButtonBase]::ClickEvent)) })
+$SingleTileWatermarkButton.Add_Click({ $BrowseWatermarkButton.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Primitives.ButtonBase]::ClickEvent)) })
+# Captions shown as "on" or "off" for the whole batch follow the mode.
+$CaptionModeCombo.Add_SelectionChanged({ if ($script:AppMode -eq 'Batch') { Update-BatchInspector } })
+$QualityCombo.Add_SelectionChanged({ Update-BatchFooter })
+$MotionQualityCombo.Add_SelectionChanged({ Update-BatchFooter })
+
+# Thumbnails of the queued videos and the lengths of their voiceovers arrive a
+# little at a time, so a long queue never holds up the window.
+$script:QueueTimer = [Windows.Threading.DispatcherTimer]::new()
+$script:QueueTimer.Interval = [TimeSpan]::FromMilliseconds(60)
+$script:QueueTimer.Add_Tick({
+    try {
+        if ($script:ThumbnailRequests.Count -gt 0) {
+            $row = Get-QueueRow -Id ($script:ThumbnailRequests.Dequeue())
+            if ($null -ne $row) { Update-QueueRowThumbnail -Row $row }
+        }
+        if ($null -ne $script:DurationProbe) { Complete-QueueDurationProbe }
+        if ($script:ThumbnailRequests.Count -eq 0 -and $null -eq $script:DurationProbe) { $script:QueueTimer.Stop() }
+    }
+    catch {
+        $script:QueueTimer.Stop()
+        Write-ToolDiagnostic 'Queue thumbnail or voiceover measurement failed.' $_.Exception
+    }
+})
 
 $PlayPauseButton.Add_Click({
     if ($null -eq $PreviewMedia.Source) { return }
@@ -5495,6 +7525,7 @@ $window.Add_Closing({
         }
     }
     Save-UserSettings
+    Save-QueueState
     Stop-PreviewPlayback
 })
 
@@ -5660,6 +7691,10 @@ After installation, close and reopen this tool.
     }
 })
 $script:IsLoading = $false
+# The queue as it was left, and the window opens on it: most days are a batch.
+Import-QueueState
+Set-AppMode 'Batch'
+if ($script:QueueRows.Count -gt 0) { Select-QueueRow -Id ([string]$script:QueueRows[0].Id) }
 # The rail and the footer describe whatever was restored from the last session,
 # so the window opens already telling the truth about where the work stands.
 Update-WorkflowState

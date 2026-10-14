@@ -59,8 +59,16 @@ A portable Windows 11 tool for turning a folder of images and a voiceover into a
   that stretch is re-rendered, because cutting an encoded clip to a shorter
   segment cannot be done accurately without re-encoding it anyway.
 - Renders the final video in resumable 30-second segments, several at a time - as many as the machine's cores, memory and graphics encoder allow, up to six.
-- Batch-renders multiple saved project files sequentially.
+- Opens on the batch queue, which is the main page of the window: a table of the
+  day's videos with each one's name, channel, photographs, voiceover length and
+  status, the channels to filter it by, and an estimate of how long the batch will
+  take and how much space it needs. **Single video** is the other half of the same
+  switch at the top of the window.
 - Scans a folder of channel folders and queues a whole day of videos in one click.
+- Shows each video's own progress while a batch renders, with the render speed,
+  the time spent, and a frame from the latest finished stretch of the video in
+  progress. Pause keeps everything finished; Resume carries on from there.
+- Batch-renders saved project files sequentially too.
 - Keeps persistent render history with completed, failed, paused, and resumable final and batch jobs.
 - Uses NVIDIA NVENC for H.264 encoding where the graphics card provides it.
 - Uses a custom OpenCL compositor for colour-correct RGB Screen blending so the watermark does not crush shadows or posterize photos.
@@ -95,34 +103,76 @@ The folder is portable. Keep these files and folders together:
 
 ## Workflow
 
+The window opens on **Batch**, the queue of the day's videos. **Single video**, at
+the top of the window beside it, makes one video at a time.
+
+### Single video
+
 1. Select a folder containing JPG, JPEG, PNG, or WEBP images. Only files directly inside that folder are used.
 2. Select the voiceover.
 3. Select the full-frame MOV or MP4 animated watermark.
 4. Choose the final MP4 filename using **Save As**.
 5. Adjust image timing, zoom, captions, blur, brightness, and quality if needed. Use the
    left rail to move between the five settings sections.
-6. Click **Generate 60s Preview**.
-7. Review the preview in the built-in player.
-8. Click **Render / Resume Final**.
+6. Click **Preview 60s**.
+7. Review the preview in the built-in player. Until there is a preview, the space
+   the player takes shows the three sources and what is still missing, and the
+   most recent single videos, instead of an empty black frame.
+8. Click **Render final**.
 
 The first caption run downloads an offline multilingual speech model (about 465 MB). Interrupted downloads resume, and the model and generated captions are cached for later runs.
 
 After captions are generated, use **Edit Captions** to correct the SRT before rendering. The editor remains open beside the main player, so text and timestamp edits can be checked while seeking or playing. Caption changes never require regenerating the 60-second preview; a burned-caption final export applies the current style and SRT during rendering.
 
-For batch work, click **Batch Projects**. Add any number of videos, selecting an
-images folder, voiceover, **watermark** and MP4 output for each one, then click
-**Render All**; the tool builds the projects and renders them one at a time so the
-laptop is not overloaded. A video added by mistake is dropped with **Remove**.
+### Batch
+
+**Scan channels folder** queues the day's videos (below), and **+ Add video** adds
+one by hand: pick its image folder, and a voiceover of the same name beside the
+folder is found automatically. Type each video's name in the table, then click
+**Render all**; the tool builds the projects and renders them one at a time so the
+laptop is not overloaded. A video added by mistake is dropped with its **x**.
+
+The status column says what each video still needs - a name, a folder to save in,
+a voiceover or watermark that is missing, or a name another video already uses -
+and the bottom of the window sums it up, so nothing is found out halfway through a
+batch. The left rail lists the channels in the queue; picking one narrows the
+table to it.
+
+Selecting a video shows its own files in the panel on the right: its name, the
+folder it is saved in, its photographs, voiceover and watermark, each with
+**Browse**. From there **Preview 60s** opens it in Single video with the player,
+the storyboard and the caption handles, and renders its first minute; the batch
+then renders exactly the timeline that preview was made with. **Edit captions**
+opens that video's captions in the caption editor, generating them first if they
+do not exist yet, and the batch uses the corrected text.
+
+Motion, captions, backdrop and export quality are set once, under **Applies to
+every video** in the left rail, and apply to the whole queue.
 
 Each video carries its own watermark, so one batch can mix videos that do not share
-one. The box at the top of that window is a starting value only: it fills in the
-watermark of each video as you add it, which keeps a batch that does share one
-watermark to a single browse. Every video must end up with a watermark, and what
-renders is always the video's own.
+one. A scanned video takes its channel's watermark; the **Watermark for videos
+added by hand** box fills in the watermark of each video added with **+ Add video**,
+which keeps a batch that does share one watermark to a single browse. Every video
+must end up with a watermark, and what renders is always the video's own.
+
+While the batch renders, the table shows each video as queued, rendering (with its
+own progress) or done, with **Open** beside every finished one. The panel on the
+right shows the video being rendered, a frame from its latest finished stretch, the
+render speed and the time spent, and the bottom of the window says when the whole
+batch will finish, weighed by the length of each video. **Pause** stops it keeping
+everything finished; **Resume** carries on from there. Finished videos stay in the
+queue marked Done until **Clear finished**.
+
+The queue is kept between sessions, so closing the tool does not lose the names
+already typed.
+
+The estimate before **Render all** starts from the speeds measured in this README
+and settles on this computer's own speed once a batch of a few minutes or more has
+finished here.
 
 ### Scanning a channels folder
 
-**Scan Channels Folder**, in the same window, queues a day of videos across several
+**Scan channels folder** queues a day of videos across several
 channels without pointing at each folder by hand. Pick the folder that holds the
 channel folders; the shape it expects inside each one is:
 
@@ -140,13 +190,13 @@ Youtube Channels\
 ```
 
 Every numbered folder that has a voiceover of the same name beside it becomes a
-queued video, already carrying its channel's watermark. Its **Output name** box
-already holds that channel's `videos data` folder, ending in a backslash, so the
-finished video is saved beside the day's data; type the video's name after it.
-The row shows the file it will write as the name is typed. A bare name with no
-folder goes into the same place, and a title's colons and question marks are
-turned into something Windows accepts. Because only the contents change from day
-to day, tomorrow is the same scan of the same folder.
+queued video, already carrying its channel's watermark. It is saved in that
+channel's `videos data` folder, beside the day's data, so only its name is typed in
+the table. The panel on the right shows the file it will write as the name is
+typed. A name typed with a folder in front of it is saved there instead, and a
+title's colons and question marks are turned into something Windows accepts.
+Because only the contents change from day to day, tomorrow is the same scan of the
+same folder; scanning again later only adds the videos not already queued.
 
 #### Naming the videos with titles.txt
 
@@ -171,9 +221,8 @@ may use `1.`, `1)`, `1:` or `1 -` instead of `1 =`. Blank lines are ignored, and
 is a line like `2 =` with no title yet: that video is left for you to type. Save
 it as UTF-8 (Notepad's default) so non-English titles come through.
 
-Every named row still shows its full path and can be edited before Render All. A
-video the file does not name is left for you to type, and the caret waits in the
-first one. Whatever in the file could not be used - a heading that matches no
+Every name can still be edited before Render all. A video the file does not name
+is left for you to type, and the caret waits in the first one. Whatever in the file could not be used - a heading that matches no
 channel, a title for a video that was not queued, a line that is neither a
 heading nor a title - is listed with the skipped items under the scan summary.
 Replace the titles each day along with the rest of the day's files.
@@ -188,12 +237,12 @@ that keeps its numbered folders directly in the channel folder scans too. A
 channel folder holding several videos needs `watermark` in the name of the one to
 use, otherwise the choice is ambiguous and the channel is skipped. Anything that
 cannot be paired - a folder with no voiceover, a voiceover with no folder, a
-folder with no images - is counted in the line above the list and named in full
-when hovering over it, rather than being queued half-configured.
+folder with no images - is counted in the line above the table and named in full
+by the **skipped - why?** button beside it, rather than being queued
+half-configured.
 
-Motion and caption settings come from the main window and are applied to every
-queued video. The same window also retains **Render Saved Projects** for existing
-`.svp.json` projects.
+**Saved projects**, beside the scan button, renders existing `.svp.json` projects
+as a batch.
 
 Use **Render History** from the left navigation to inspect jobs, open outputs, remove history entries, or resume a paused final/batch render. Jobs that were active when the application closed are marked Paused on the next launch.
 
