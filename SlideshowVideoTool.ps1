@@ -3027,23 +3027,29 @@ function Get-ValidatedImages {
         }
     }
 
-    if ($skipped.Count -gt 0) {
-        $names = ($skipped | ForEach-Object { [IO.Path]::GetFileName($_) }) -join "`r`n"
-        Show-InfoMessage "These unreadable images will be skipped:`r`n`r`n$names" 'Skipped images'
-    }
     if ($valid.Count -lt 2) {
         throw 'At least two readable images are required.'
     }
+    # Both notes are advice, not questions: the video renders the same way
+    # whatever the answer. As message boxes they stopped a batch once for every
+    # folder in it until OK was clicked, so they are a status line and a log
+    # entry now.
+    $notes = [System.Collections.Generic.List[string]]::new()
+    if ($skipped.Count -gt 0) {
+        $names = @($skipped | ForEach-Object { [IO.Path]::GetFileName($_) })
+        $shown = @($names | Select-Object -First 5) -join ', '
+        $more = if ($names.Count -gt 5) { " and $($names.Count - 5) more" } else { '' }
+        $notes.Add("Skipped $($skipped.Count) unreadable image(s): $shown$more.")
+        Write-ToolDiagnostic "Unreadable images in $($Folder) were skipped: $($names -join '; ')"
+    }
     if ($upscaled.Count -gt 0) {
-        # Advice, not a question: the video renders the same way whatever the
-        # answer, with Lanczos enlarging the small images. As a message box it
-        # stopped a batch once for every folder in it, so it is a status line
-        # and a log entry now.
-        $StatusText.Text = "$($upscaled.Count) of $($valid.Count) images in this folder are below 1080p and will be enlarged."
+        # Lanczos enlarges the small images.
+        $notes.Add("$($upscaled.Count) of $($valid.Count) images in this folder are below 1080p and will be enlarged.")
         $examples = @($upscaled | Select-Object -First 8) -join '; '
         $more = if ($upscaled.Count -gt 8) { "; and $($upscaled.Count - 8) more" } else { '' }
         Write-ToolDiagnostic "Low-resolution images in $($Folder): $($upscaled.Count) of $($valid.Count) will be enlarged to fit 1080p. $examples$more"
     }
+    if ($notes.Count -gt 0) { $StatusText.Text = $notes -join '  ' }
     return $valid.ToArray()
 }
 
