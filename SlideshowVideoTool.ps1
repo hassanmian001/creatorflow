@@ -3060,8 +3060,13 @@ function Test-VideoStream {
         '-show_entries', 'stream=width,height',
         '-of', 'csv=s=x:p=0', $Path
     )
-    $output = & $script:FfprobePath @arguments 2>$null
-    return ($LASTEXITCODE -eq 0 -and $output -match '^\d+x\d+')
+    # With ErrorActionPreference=Stop, FFprobe's stderr ("moov atom not
+    # found" on a half-copied file) throws instead of just failing the check.
+    try {
+        $output = & $script:FfprobePath @arguments 2>$null
+        return ($LASTEXITCODE -eq 0 -and $output -match '^\d+x\d+')
+    }
+    catch { return $false }
 }
 
 function Get-PlanSignature {
@@ -5789,7 +5794,7 @@ function Start-QueueRender {
                 New-Item -ItemType Directory -Path $resolvedFolder -Force | Out-Null
             }
             if (-not $checkedWatermarks.ContainsKey($watermark)) {
-                if (-not (Test-VideoStream $watermark)) { throw "$($label): FFprobe could not read the selected watermark video." }
+                if (-not (Test-VideoStream $watermark)) { throw "$($label): the watermark video could not be read. It is probably incomplete or damaged (for example a copy or download that did not finish). Replace it and try again.`r`n`r`n$watermark" }
                 $checkedWatermarks[$watermark] = $true
             }
             if ([string]::IsNullOrWhiteSpace($resolvedFolder) -or -not (Test-Path -LiteralPath $resolvedFolder -PathType Container)) { throw "$($label): the output folder does not exist." }
