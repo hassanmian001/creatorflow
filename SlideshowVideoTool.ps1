@@ -5793,8 +5793,12 @@ function Start-QueueRender {
                 $checkedWatermarks[$watermark] = $true
             }
             if ([string]::IsNullOrWhiteSpace($resolvedFolder) -or -not (Test-Path -LiteralPath $resolvedFolder -PathType Container)) { throw "$($label): the output folder does not exist." }
-            $images = @(Get-ValidatedImages $imageFolder)
-            $duration = Get-MediaDurationSeconds -FfprobePath $script:FfprobePath -MediaPath $audio
+            try { $images = @(Get-ValidatedImages $imageFolder) }
+            catch { throw "$($label): $($_.Exception.Message)" }
+            # FFprobe's own wording ("moov atom not found") names neither the
+            # row nor the file, so the person could not tell which audio to fix.
+            try { $duration = Get-MediaDurationSeconds -FfprobePath $script:FfprobePath -MediaPath $audio }
+            catch { throw "$($label): the audio file could not be read. It is probably incomplete or damaged (for example a download that did not finish). Replace it and try again.`r`n`r`n$audio`r`n`r`n$($_.Exception.Message)" }
             $row.Duration = $duration
             $signature = Get-PlanSignature -Images $images -Duration $duration -Settings $settings -AudioPath $audio
             $timeline = $null
