@@ -2982,15 +2982,25 @@ function Select-SaveFile {
 
 function Get-ImageDimensions {
     param([string]$Path)
+    # The image is decoded, not just its header read. A JPEG with chroma
+    # subsampling FFmpeg has no decoder for still reports its size from the
+    # header, so a header check passed it and the render stopped on it later
+    # with "Not yet implemented in FFmpeg". Decoding the one frame costs about
+    # 20-30 ms more per image and gives no size for such a file.
     $arguments = @(
         '-v', 'error', '-select_streams', 'v:0',
-        '-show_entries', 'stream=width,height',
+        '-read_intervals', '%+#1',
+        '-show_entries', 'frame=width,height',
         '-of', 'csv=s=x:p=0', $Path
     )
     try {
-        $output = & $script:FfprobePath @arguments 2>$null
-        if ($LASTEXITCODE -ne 0 -or $output -notmatch '^(\d+)x(\d+)$') { return $null }
-        return [pscustomobject]@{ Width = [int]$Matches[1]; Height = [int]$Matches[2] }
+        $output = @(& $script:FfprobePath @arguments 2>$null)
+        if ($LASTEXITCODE -ne 0) { return $null }
+        $line = $output | Where-Object { [string]$_ -match '^(\d+)x(\d+)' } | Select-Object -First 1
+        if ($null -eq $line -or [string]$line -notmatch '^(\d+)x(\d+)') { return $null }
+        $width = [int]$Matches[1]; $height = [int]$Matches[2]
+        if ($width -le 0 -or $height -le 0) { return $null }
+        return [pscustomobject]@{ Width = $width; Height = $height }
     }
     catch { return $null }
 }
