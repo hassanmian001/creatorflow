@@ -402,7 +402,7 @@ try {
     $completedFrames = 0
     $segmentJobs = [Collections.Generic.List[object]]::new()
     $openClDevice = if ($script:Job.PSObject.Properties['OpenClDevice']) { [string]$script:Job.OpenClDevice } else { '' }
-    $filterBackend = if ($script:Job.PSObject.Properties['FilterBackend']) { [string]$script:Job.FilterBackend } elseif ([string]$script:Job.Encoder -eq 'h264_vulkan') { 'vulkan' } else { 'cpu' }
+    $filterBackend = if ($script:Job.PSObject.Properties['FilterBackend']) { [string]$script:Job.FilterBackend } else { 'cpu' }
     $filterVulkanDeviceIndex = if ($script:Job.PSObject.Properties['FilterVulkanDeviceIndex']) { [int]$script:Job.FilterVulkanDeviceIndex } else { [int]$script:Job.VulkanDeviceIndex }
     $screenKernelPath = if ($script:Job.PSObject.Properties['ScreenKernelPath']) { [string]$script:Job.ScreenKernelPath } else { '' }
     $ffmpegLogLevel = if ($script:Job.PSObject.Properties['LogLevel']) { [string]$script:Job.LogLevel } else { 'error' }
@@ -459,7 +459,7 @@ try {
             $definition = New-VulkanFilterGraph -Timeline $slice -RenderFrames $frameCount -ZoomMaximumPercent ([double]$script:Job.Settings.ZoomMaximum) -BlurAmount ([double]$script:Job.Settings.BlurAmount) -BackgroundBrightnessPercent ([double]$script:Job.Settings.BackgroundBrightness) -SubtitlePath $segmentSrt -CaptionPreset $captionPreset -CaptionStyle $script:Job.Settings -HardwareOutputFrames ([string]$script:Job.Encoder -eq 'h264_vulkan') -CrossfadeSeconds (Get-JobCrossfadeSeconds) -OverscanScale (Get-JobOverscanScale) -Width 1920 -Height 1080
         }
         else {
-            $definition = New-FilterGraph -Timeline $slice -RenderFrames $frameCount -ZoomMaximumPercent ([double]$script:Job.Settings.ZoomMaximum) -BlurAmount ([double]$script:Job.Settings.BlurAmount) -BackgroundBrightnessPercent ([double]$script:Job.Settings.BackgroundBrightness) -SubtitlePath $segmentSrt -CaptionPreset $captionPreset -CaptionStyle $script:Job.Settings -CrossfadeSeconds (Get-JobCrossfadeSeconds) -OverscanScale (Get-JobOverscanScale) -Width 1920 -Height 1080
+            $definition = New-FilterGraph -Timeline $slice -RenderFrames $frameCount -ZoomMaximumPercent ([double]$script:Job.Settings.ZoomMaximum) -BlurAmount ([double]$script:Job.Settings.BlurAmount) -BackgroundBrightnessPercent ([double]$script:Job.Settings.BackgroundBrightness) -SubtitlePath $segmentSrt -CaptionPreset $captionPreset -CaptionStyle $script:Job.Settings -HardwareOutputFrames:([string]$script:Job.Encoder -eq 'h264_vulkan') -CrossfadeSeconds (Get-JobCrossfadeSeconds) -OverscanScale (Get-JobOverscanScale) -Width 1920 -Height 1080
         }
         $filterPath = Join-Path $resumeDirectory ('filter-{0:D4}.txt' -f $segmentIndex)
         [IO.File]::WriteAllText($filterPath, $definition.FilterText, [Text.UTF8Encoding]::new($false))
@@ -472,6 +472,10 @@ try {
         }
         elseif ($filterBackend -eq 'vulkan') {
             foreach ($value in @('-init_hw_device',"vulkan=slideshowgpu:$filterVulkanDeviceIndex",'-filter_hw_device','slideshowgpu')) { $arguments.Add($value) }
+        }
+        elseif ([string]$script:Job.Encoder -eq 'h264_vulkan') {
+            # Processor graph, Vulkan encoder: the graph's last step uploads to this device.
+            foreach ($value in @('-init_hw_device',"vulkan=slideshowgpu:$([int]$script:Job.VulkanDeviceIndex)",'-filter_hw_device','slideshowgpu')) { $arguments.Add($value) }
         }
         foreach ($value in @('-f','lavfi','-i','anullsrc=r=48000:cl=stereo','-stream_loop','-1')) { $arguments.Add($value) }
         if ($watermarkDuration -gt 0) {

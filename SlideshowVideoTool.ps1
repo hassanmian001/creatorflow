@@ -2560,10 +2560,13 @@ function Select-AvailableFilterBackend {
     # photographs and lane count - two percent - so this trades nothing for a
     # video that is right every time.
     #
-    # Vulkan's own H.264 encoder is the one exception. It only accepts frames
-    # that are already on the graphics card, so it has no processor path to
-    # fall back to, and it is itself only reached when NVENC, AMF and Quick
-    # Sync have all been ruled out.
+    # Vulkan's own H.264 encoder used to be the exception, on the belief that
+    # it had no processor path. It does: the processor graph uploads its
+    # finished frame as the last step. Keeping that encoder on the Vulkan graph
+    # was also what broke it - once a Vulkan failure switched motion effects to
+    # the processor, the encoder received processor frames it cannot read
+    # ("Impossible to convert between the formats ... auto_scale") and every
+    # following video failed the same way.
     param(
         [Parameter(Mandatory = $true)][psobject]$Timeline,
         [Parameter(Mandatory = $true)][psobject]$Settings,
@@ -2574,14 +2577,6 @@ function Select-AvailableFilterBackend {
     }
 
     $script:EncoderBaseText = [string]$EncoderText.Text
-    if ($script:SelectedEncoder -eq 'h264_vulkan') {
-        $script:FilterBackend = 'vulkan'
-        $script:FilterVulkanDeviceIndex = [int]$script:VulkanDeviceIndex
-        Set-FilterBackendDisplay
-        Write-ToolDiagnostic "Filter backend selected. Backend=vulkan VulkanDevice=$($script:FilterVulkanDeviceIndex) (required by the Vulkan encoder)"
-        return $script:FilterBackend
-    }
-
     $script:FilterBackend = 'cpu'
     $script:FilterVulkanDeviceIndex = $null
     Set-FilterBackendDisplay
@@ -6587,6 +6582,7 @@ function Start-VideoRender {
                 -BackgroundBrightnessPercent $settings.BackgroundBrightness `
                 -SubtitlePath '' `
                 -CaptionPreset $settings.CaptionPreset `
+                -HardwareOutputFrames:($encoder -eq 'h264_vulkan') `
                 -CrossfadeSeconds (Get-CrossfadeSeconds $settings) `
                 -OverscanScale (Get-OverscanScale $settings) `
                 -Width 1920 -Height 1080
@@ -6622,6 +6618,14 @@ function Start-VideoRender {
         elseif ($filterBackend -eq 'vulkan') {
             foreach ($value in @(
                     '-init_hw_device', "vulkan=slideshowgpu:$($script:FilterVulkanDeviceIndex)",
+                    '-filter_hw_device', 'slideshowgpu')) {
+                $arguments.Add($value)
+            }
+        }
+        elseif ($encoder -eq 'h264_vulkan') {
+            # Processor graph, Vulkan encoder: the graph's last step uploads to this device.
+            foreach ($value in @(
+                    '-init_hw_device', "vulkan=slideshowgpu:$([int]$script:VulkanDeviceIndex)",
                     '-filter_hw_device', 'slideshowgpu')) {
                 $arguments.Add($value)
             }

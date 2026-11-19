@@ -634,6 +634,11 @@ function New-FilterGraph {
         # table where it is used: more detail, less speed, and at 1.1 the crop
         # at maximum zoom is exactly a delivery frame so nothing is enlarged.
         [double]$OverscanScale = 1.1,
+        # Vulkan's H.264 encoder only takes frames already on the graphics
+        # card. Filtering stays on the processor; the finished frame is
+        # uploaded at the very end. Needs -filter_hw_device pointing at a
+        # Vulkan device.
+        [switch]$HardwareOutputFrames,
         [int]$Width = 1920,
         [int]$Height = 1080
     )
@@ -857,12 +862,14 @@ function New-FilterGraph {
         $filters.Add("[vseq]format=gbrp[vseqrgb]")
         $filters.Add("[watermark]format=gbrp[watermarkrgb]")
         $filters.Add("[vseqrgb][watermarkrgb]blend=all_mode=screen:shortest=0:repeatlast=1,trim=end_frame=$RenderFrames,setpts=PTS-STARTPTS,format=yuv420p[composited]")
+        $uploadTail = if ($HardwareOutputFrames) { ',format=nv12,hwupload' } else { '' }
         if ([string]::IsNullOrWhiteSpace($SubtitlePath)) {
-            $filters.Add('[composited]null[vout]')
+            if ($HardwareOutputFrames) { $filters.Add('[composited]format=nv12,hwupload[vout]') }
+            else { $filters.Add('[composited]null[vout]') }
         }
         else {
             $subtitleFilterPath = ConvertTo-FilterPath $SubtitlePath
-            $filters.Add("[composited]subtitles=filename='$subtitleFilterPath':force_style='$captionForceStyle'[vout]")
+            $filters.Add("[composited]subtitles=filename='$subtitleFilterPath':force_style='$captionForceStyle'$uploadTail[vout]")
         }
     }
 

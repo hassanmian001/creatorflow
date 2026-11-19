@@ -111,6 +111,13 @@ foreach ($duration in $durations) {
         # Sharpening scored worse against that reference in every configuration.
         Assert-True (-not ($graph.FilterText -match 'unsharp=')) 'CPU path does not manufacture edge energy'
 
+        $cpuForVulkan = New-FilterGraph -Timeline $plan -RenderFrames $previewFrames -HardwareOutputFrames
+        Assert-True ($cpuForVulkan.FilterText -match '\[composited\]format=nv12,hwupload\[vout\]') 'Processor graph uploads finished frames for the Vulkan encoder'
+        Assert-True (-not ($cpuForVulkan.FilterText -match 'libplacebo=')) 'Vulkan encoder no longer pulls in the Vulkan motion graph'
+        $cpuCaptionsForVulkan = New-FilterGraph -Timeline $plan -RenderFrames $previewFrames -SubtitlePath 'C:\captions\video.srt' -HardwareOutputFrames
+        Assert-True ($cpuCaptionsForVulkan.FilterText -match 'subtitles=[^\r\n]*,format=nv12,hwupload\[vout\]') 'Processor graph uploads after burned captions'
+        Assert-True ($graph.FilterText -match '\[composited\]null\[vout\]') 'Processor graph stays in system memory for other encoders'
+
         $gpuSoftwareOut = New-VulkanFilterGraph `
             -Timeline $plan `
             -RenderFrames $previewFrames `

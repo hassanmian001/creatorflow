@@ -448,9 +448,9 @@ It is also no longer worth the risk. That graph earned its place when every fram
 was generated twice for shutter blur; with that gone it measured 33.7 seconds
 against the processor's 34.3 on the same photographs and lane count — two percent.
 
-Vulkan's own H.264 encoder is the one exception and still uses that graph, because
-it only accepts frames that are already on the graphics card. It is reached only
-when NVENC, AMF and Quick Sync have all been ruled out.
+Vulkan's own H.264 encoder uses the processor graph too. It only accepts frames
+that are already on the graphics card, so the graph uploads each finished frame as
+its last step. It is reached only when NVENC and AMF have been ruled out.
 
 Several independent 30-second segments render simultaneously on a machine with
 enough CPU and memory, up to six. An 8 GB laptop remains at one lane to avoid paging. Selecting
