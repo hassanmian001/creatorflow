@@ -189,7 +189,7 @@ function Invoke-TrackedFfmpeg {
     if ($process.ExitCode -ne 0) {
         $details = ''
         if (Test-Path -LiteralPath $ErrorFile -PathType Leaf) {
-            $rawDetails = Get-Content -LiteralPath $ErrorFile -Raw -ErrorAction SilentlyContinue
+            $rawDetails = Get-Content -LiteralPath $ErrorFile -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
             if ($null -ne $rawDetails) { $details = $rawDetails.Trim() }
         }
         throw "FFmpeg failed with code $($process.ExitCode). $details"
@@ -266,7 +266,7 @@ function Invoke-ParallelSegmentJobs {
                     $segmentNumber = [int]$entry.Definition.SegmentIndex + 1
                     $details = ''
                     if ($exitCode -ne 0 -and (Test-Path -LiteralPath ([string]$entry.Definition.ErrorFile) -PathType Leaf)) {
-                        $raw = Get-Content -LiteralPath ([string]$entry.Definition.ErrorFile) -Raw -ErrorAction SilentlyContinue
+                        $raw = Get-Content -LiteralPath ([string]$entry.Definition.ErrorFile) -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
                         if ($null -ne $raw) { $details = $raw.Trim() }
                     }
                     $entry.Process.Dispose()
@@ -288,8 +288,9 @@ function Invoke-ParallelSegmentJobs {
                         }
                         throw "Segment $segmentNumber failed with FFmpeg code $exitCode. $details"
                     }
-                    if (-not (Test-Segment -Path ([string]$entry.Definition.SegmentPath) -ExpectedSeconds ([double]$entry.Definition.ExpectedSeconds))) {
-                        throw "Segment $segmentNumber did not pass validation."
+                    $problem = Get-SegmentProblem -Path ([string]$entry.Definition.SegmentPath) -ExpectedSeconds ([double]$entry.Definition.ExpectedSeconds)
+                    if ($problem) {
+                        throw "Segment $segmentNumber did not pass validation: $problem"
                     }
                     $finishedFrames += [int]$entry.Definition.FrameCount
                 }
@@ -331,13 +332,46 @@ function Get-MediaDuration {
     return $duration
 }
 
+function Get-VideoPacketCount {
+    param([string]$Path)
+    try {
+        $value = & ([string]$script:Job.FfprobePath) '-v' 'error' '-select_streams' 'v:0' '-count_packets' '-show_entries' 'stream=nb_read_packets' '-of' 'default=noprint_wrappers=1:nokey=1' $Path 2>$null
+        if ($LASTEXITCODE -ne 0) { return -1 }
+    }
+    catch { return -1 }
+    $count = -1
+    if (-not [int]::TryParse(([string]$value).Trim(), [ref]$count)) { return -1 }
+    return $count
+}
+
+function Get-SegmentProblem {
+    # Returns '' for a good segment, otherwise what is wrong with it.
+    #
+    # This used to demand at least 50,000 bytes. The last segment of a video
+    # holds whatever is left after the 30-second segments, which can be a
+    # handful of frames, and a few frames of a still photograph encode to
+    # about 17-22 KB. Every video whose length landed just past a 30-second
+    # mark therefore failed on its last segment, every time, Resume included.
+    # Counting the frames is the check the size was standing in for.
+    param([string]$Path, [double]$ExpectedSeconds)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return 'the file was not written.' }
+    $file = Get-Item -LiteralPath $Path
+    if ($file.Length -lt 1024) { return "the file is only $($file.Length) bytes." }
+    $fps = [int]$script:Job.Timeline.Fps
+    $expectedFrames = [int][Math]::Round($ExpectedSeconds * $fps)
+    $frames = Get-VideoPacketCount $Path
+    if ($frames -lt 0) { return 'FFprobe could not read it.' }
+    if ($frames -ne $expectedFrames) { return "it holds $frames frames instead of $expectedFrames." }
+    $duration = Get-MediaDuration $Path
+    if ($duration -le 0 -or [Math]::Abs($duration - $ExpectedSeconds) -ge 0.35) {
+        return ('it lasts {0:0.000} s instead of {1:0.000} s.' -f $duration, $ExpectedSeconds)
+    }
+    return ''
+}
+
 function Test-Segment {
     param([string]$Path, [double]$ExpectedSeconds)
-    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
-    $file = Get-Item -LiteralPath $Path
-    if ($file.Length -lt 50000) { return $false }
-    $duration = Get-MediaDuration $Path
-    return ($duration -gt 0 -and [Math]::Abs($duration - $ExpectedSeconds) -lt 0.35)
+    return [string]::IsNullOrEmpty((Get-SegmentProblem -Path $Path -ExpectedSeconds $ExpectedSeconds))
 }
 
 function ConvertTo-SrtTime {
@@ -350,7 +384,7 @@ function ConvertTo-SrtTime {
 function New-SegmentSubtitle {
     param([string]$SourcePath, [double]$StartSeconds, [double]$DurationSeconds, [string]$DestinationPath, [int]$MaxWordsPerLine = 8)
     if ([string]::IsNullOrWhiteSpace($SourcePath) -or -not (Test-Path -LiteralPath $SourcePath -PathType Leaf)) { return '' }
-    $source = Get-Content -LiteralPath $SourcePath -Raw
+    $source = Get-Content -LiteralPath $SourcePath -Raw -Encoding UTF8
     $pattern = '(?ms)^\s*\d+\s*\r?\n(?<start>\d{2}:\d{2}:\d{2},\d{3})\s*-->\s*(?<end>\d{2}:\d{2}:\d{2},\d{3})[^\r\n]*\r?\n(?<text>.*?)(?=\r?\n\s*\r?\n|\z)'
     $blocks = [regex]::Matches($source, $pattern)
     $segmentStart = [TimeSpan]::FromSeconds($StartSeconds)

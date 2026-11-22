@@ -3426,7 +3426,7 @@ function Complete-CaptionGeneration {
         if ($process.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $state.OutputSrt -PathType Leaf)) {
             $message = 'The offline caption engine failed.'
             if (Test-Path -LiteralPath $state.ErrorPath -PathType Leaf) {
-                $raw = Get-Content -LiteralPath $state.ErrorPath -Raw -ErrorAction SilentlyContinue
+                $raw = Get-Content -LiteralPath $state.ErrorPath -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
                 if (-not [string]::IsNullOrWhiteSpace($raw)) { $message = $raw.Trim() }
             }
             throw $message
@@ -3482,7 +3482,7 @@ function ConvertTo-SrtTimestamp {
 function Read-SrtEntries {
     param([string]$Path)
     $collection = [Collections.ObjectModel.ObservableCollection[object]]::new()
-    $source = Get-Content -LiteralPath $Path -Raw
+    $source = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
     $pattern = '(?ms)^\s*\d+\s*\r?\n(?<start>\d{2}:\d{2}:\d{2},\d{3})\s*-->\s*(?<end>\d{2}:\d{2}:\d{2},\d{3})[^\r\n]*\r?\n(?<text>.*?)(?=\r?\n\s*\r?\n|\z)'
     $matches = [regex]::Matches($source, $pattern)
     $index = 1
@@ -6389,7 +6389,7 @@ function Complete-BatchRender {
             if ($process.ExitCode -ne 0) {
                 $details = 'The batch worker stopped before all projects completed.'
                 if (Test-Path -LiteralPath $state.ErrorPath -PathType Leaf) {
-                    $raw = Get-Content -LiteralPath $state.ErrorPath -Raw -ErrorAction SilentlyContinue
+                    $raw = Get-Content -LiteralPath $state.ErrorPath -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
                     # The worker's stack is kept in the log for diagnosis, below a
                     # marker; the person is shown what went wrong, not where.
                     if (-not [string]::IsNullOrWhiteSpace($raw)) { $details = ($raw -split '(?m)^--- worker stack ---')[0].Trim() }
@@ -6786,7 +6786,7 @@ function Complete-VideoRender {
         if ($exitCode -ne 0 -or -not (Test-Path -LiteralPath $expectedOutputPath -PathType Leaf)) {
             $errorText = ''
             if (Test-Path -LiteralPath $state.ErrorPath -PathType Leaf) {
-                $rawError = Get-Content -LiteralPath $state.ErrorPath -Raw -ErrorAction SilentlyContinue
+                $rawError = Get-Content -LiteralPath $state.ErrorPath -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
                 if ($null -ne $rawError) {
                     $errorText = $rawError.Trim()
                 }
