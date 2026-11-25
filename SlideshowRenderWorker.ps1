@@ -158,6 +158,54 @@ function Complete-LoudnessFilter {
     }
 }
 
+function Step-VoiceoverEncode {
+    # Encodes the normalised voiceover while the video segments render, so
+    # the final join only copies streams. Measured on a 20-minute video, the
+    # loudnorm pass and AAC encode took 51 seconds when they ran after the
+    # last segment - a third of the whole render once motion moved to the
+    # GPU - and the copy-only join takes under one. Called on every tick of
+    # the segment loop; it starts the encode as soon as the loudness
+    # analysis it depends on has finished, and otherwise does nothing.
+    param([psobject]$State)
+    if ($State.Done -or $null -ne $State.Process) { return }
+    $analysisProcess = $State.Analysis.Process
+    if ($null -ne $analysisProcess) {
+        $analysisProcess.Refresh()
+        if (-not $analysisProcess.HasExited) { return }
+    }
+    $State.Filter = Complete-LoudnessFilter -Analysis $State.Analysis
+    # Complete-LoudnessFilter has disposed of it.
+    $State.Analysis.Process = $null
+    if (Test-Path -LiteralPath $State.PartialPath -PathType Leaf) { Remove-Item -LiteralPath $State.PartialPath -Force }
+    # -ar 48000 after the filter matters: loudnorm resamples internally, and
+    # without it the track can leave at loudnorm's own rate.
+    $arguments = @('-y','-hide_banner','-loglevel','error','-nostats','-threads','1','-vn','-i',[string]$script:Job.AudioPath,'-af',$State.Filter,'-c:a','aac','-b:a',$State.Bitrate,'-ar','48000','-ac','2',$State.PartialPath)
+    $State.Process = Start-Process -FilePath ([string]$script:Job.FfmpegPath) -ArgumentList (Join-Arguments $arguments) -PassThru -WindowStyle Hidden -RedirectStandardError $State.ErrorPath
+    $null = $State.Process.Handle
+}
+
+function Complete-VoiceoverEncode {
+    # Waits for the voiceover encode and keeps it for Resume. Returns $false
+    # if it failed, in which case the join encodes the voiceover itself.
+    param([psobject]$State)
+    if ($State.Done) { return $true }
+    if ($null -ne $State.Analysis -and $null -ne $State.Analysis.Process) { $State.Analysis.Process.WaitForExit() }
+    Step-VoiceoverEncode -State $State
+    if ($null -eq $State.Process) { return $false }
+    $State.Process.WaitForExit()
+    $State.Process.Refresh()
+    $exitCode = $State.Process.ExitCode
+    $State.Process.Dispose()
+    $State.Process = $null
+    if ($exitCode -ne 0 -or -not (Test-Path -LiteralPath $State.PartialPath -PathType Leaf)) {
+        Write-WorkerDiagnostic "The voiceover could not be encoded ahead of the join (FFmpeg code $exitCode); the join encodes it instead."
+        return $false
+    }
+    Move-Item -LiteralPath $State.PartialPath -Destination $State.Path -Force
+    $State.Done = $true
+    return $true
+}
+
 function Invoke-TrackedFfmpeg {
     param(
         [string[]]$Arguments,
@@ -221,7 +269,10 @@ function Invoke-ParallelSegmentJobs {
         [int]$CompletedFrames,
         [int]$TotalFrames,
         [int]$Fps,
-        [int]$MaximumParallel = 2
+        [int]$MaximumParallel = 2,
+        # Run on every pass of the polling loop, for work that rides along
+        # with the segments (the voiceover encode).
+        [scriptblock]$OnTick = $null
     )
     if ($Jobs.Count -eq 0) { return $CompletedFrames }
     # Honour the per-machine lane count worked out by the caller. This used to
@@ -304,6 +355,7 @@ function Invoke-ParallelSegmentJobs {
             $activeNumbers = @($active | ForEach-Object { ([int]$_.Definition.SegmentIndex + 1) }) -join ' and '
             $message = if ($activeNumbers) { "Rendering segments $activeNumbers simultaneously..." } else { 'Preparing the next render segments...' }
             Write-WorkerProgress -Percent ([Math]::Min(94.0, $percent)) -Message $message
+            if ($null -ne $OnTick) { & $OnTick }
             if ($active.Count -gt 0) { Start-Sleep -Milliseconds 350 }
         }
     }
@@ -456,7 +508,7 @@ function New-SegmentJobs {
         }
         if ($Backend -eq 'opencl') {
             $kernelPath = Join-Path $SegmentDirectory ('motion-{0:D4}.cl' -f $segmentIndex)
-            $definition = New-OpenClFilterGraph -Timeline $slice -RenderFrames $frameCount -MotionKernelPath $kernelPath -OpenClScreenKernelPath $screenKernelPath -ZoomMaximumPercent ([double]$script:Job.Settings.ZoomMaximum) -BlurAmount ([double]$script:Job.Settings.BlurAmount) -BackgroundBrightnessPercent ([double]$script:Job.Settings.BackgroundBrightness) -SubtitlePath $segmentSrt -CaptionPreset $captionPreset -CaptionStyle $script:Job.Settings -CrossfadeSeconds (Get-JobCrossfadeSeconds) -OverscanScale (Get-JobOverscanScale) -Width 1920 -Height 1080
+            $definition = New-OpenClFilterGraph -Timeline $slice -RenderFrames $frameCount -MotionKernelPath $kernelPath -WatermarkRect $watermarkRect -WatermarkLoopFrames $watermarkLoopFrames -ZoomMaximumPercent ([double]$script:Job.Settings.ZoomMaximum) -BlurAmount ([double]$script:Job.Settings.BlurAmount) -BackgroundBrightnessPercent ([double]$script:Job.Settings.BackgroundBrightness) -SubtitlePath $segmentSrt -CaptionPreset $captionPreset -CaptionStyle $script:Job.Settings -CrossfadeSeconds (Get-JobCrossfadeSeconds) -OverscanScale (Get-JobOverscanScale) -Width 1920 -Height 1080
             [IO.File]::WriteAllText($kernelPath, $definition.KernelSource, [Text.UTF8Encoding]::new($false))
         }
         elseif ($Backend -eq 'vulkan') {
@@ -552,11 +604,10 @@ try {
     $openClDevice = if ($script:Job.PSObject.Properties['OpenClDevice']) { [string]$script:Job.OpenClDevice } else { '' }
     $filterBackend = if ($script:Job.PSObject.Properties['FilterBackend']) { [string]$script:Job.FilterBackend } else { 'cpu' }
     $filterVulkanDeviceIndex = if ($script:Job.PSObject.Properties['FilterVulkanDeviceIndex']) { [int]$script:Job.FilterVulkanDeviceIndex } else { [int]$script:Job.VulkanDeviceIndex }
-    $screenKernelPath = if ($script:Job.PSObject.Properties['ScreenKernelPath']) { [string]$script:Job.ScreenKernelPath } else { '' }
     $ffmpegLogLevel = if ($script:Job.PSObject.Properties['LogLevel']) { [string]$script:Job.LogLevel } else { 'error' }
     $captionPreset = if ($script:Job.Settings.PSObject.Properties['CaptionPreset']) { [string]$script:Job.Settings.CaptionPreset } else { '1. Clean YouTube' }
     $captionWordsPerLine = if ($script:Job.Settings.PSObject.Properties['CaptionWordsPerLine']) { [int]$script:Job.Settings.CaptionWordsPerLine } else { 8 }
-    $useOpenClMotion = $filterBackend -eq 'opencl' -and ([string]$script:Job.Encoder -eq 'h264_nvenc') -and -not [string]::IsNullOrWhiteSpace($openClDevice) -and (Test-Path -LiteralPath $screenKernelPath -PathType Leaf)
+    $useOpenClMotion = $filterBackend -eq 'opencl' -and ([string]$script:Job.Encoder -eq 'h264_nvenc') -and -not [string]::IsNullOrWhiteSpace($openClDevice)
     $backend = if ($useOpenClMotion) { 'opencl' } elseif ($filterBackend -eq 'vulkan') { 'vulkan' } else { 'cpu' }
     # A video whose GPU render failed is finished on the processor, in a folder
     # of its own. Mixing the two renderers' segments in one video is never
@@ -568,12 +619,44 @@ try {
         $backend = 'cpu'
         $segmentDirectory = $processorDirectory
     }
+    # Measured once per video: the part of the frame the watermark touches and
+    # the length of one cycle, so the GPU graph uploads only that rectangle,
+    # once per segment. If the measurement fails the graph streams the whole
+    # watermark, which is slower and identical.
+    $watermarkRect = @()
+    $watermarkLoopFrames = 0
+    if ($backend -eq 'opencl') {
+        try {
+            $footprint = Get-WatermarkFootprint -FfmpegPath ([string]$script:Job.FfmpegPath) -WatermarkPath ([string]$script:Job.WatermarkPath) -Fps $fps
+            $watermarkRect = [int[]]$footprint.Rect
+            $watermarkLoopFrames = [int]$footprint.LoopFrames
+        }
+        catch {
+            Write-WorkerDiagnostic "Could not measure the watermark; streaming it whole. $($_.Exception.Message)"
+        }
+    }
     $processorLanes = if ($script:Job.PSObject.Properties['ParallelSegments']) { [int]$script:Job.ParallelSegments } else { 2 }
     if ($processorLanes -lt 1) { $processorLanes = 1 }
     # The GPU path stops gaining at about four lanes: on an RTX A4000 laptop 4,
     # 6 and 8 lanes all measured 8.2-8.5x realtime, while the processor time
     # they burned rose from 93 to 316 CPU-seconds per two minutes of video.
-    $maximumParallel = if ($backend -eq 'opencl') { [Math]::Min(4, $processorLanes) } else { $processorLanes }
+    #
+    # Each GPU lane holds its photographs, one cycle of the watermark and the
+    # crossfade buffers in video memory: four lanes peaked at 4.9 GB on the
+    # 8 GB A4000, and eight overflowed it, after which the driver paged and
+    # the render fell to a quarter of its speed. So also one lane per 2 GB.
+    $gpuLanes = 4
+    if ($backend -eq 'opencl') {
+        try {
+            $memoryText = & nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>$null | Select-Object -First 1
+            $memoryMb = 0
+            if ([int]::TryParse(([string]$memoryText).Trim(), [ref]$memoryMb) -and $memoryMb -gt 0) {
+                $gpuLanes = [Math]::Max(1, [Math]::Min(4, [int][Math]::Floor($memoryMb / 2048.0)))
+            }
+        }
+        catch {}
+    }
+    $maximumParallel = if ($backend -eq 'opencl') { [Math]::Min($gpuLanes, $processorLanes) } else { $processorLanes }
     # Divide the machine between the lanes explicitly. Left to itself every
     # FFmpeg process starts as many filter threads as there are cores, so four
     # lanes on an eight-core laptop ask for thirty-two threads and spend a
@@ -582,11 +665,29 @@ try {
     if ($logicalCores -lt 1) { $logicalCores = 1 }
     $threadsPerLane = [Math]::Max(1, [int][Math]::Floor($logicalCores / [double]$maximumParallel))
     $loudnessTarget = if ($script:Job.PSObject.Properties['LoudnessTargetLufs']) { [double]$script:Job.LoudnessTargetLufs } else { -14.0 }
-    $loudnessAnalysis = Start-LoudnessAnalysis -AudioPath ([string]$script:Job.AudioPath) -ReportPath (Join-Path $resumeDirectory 'loudness.json') -TargetLufs $loudnessTarget
+    $audioBitrate = if ([string]$script:Job.Settings.Quality -eq 'YouTube') { '384k' } else { '160k' }
+    # The voiceover is encoded once, alongside the segments, and kept for
+    # Resume like a finished segment. Its file name carries the bitrate and
+    # loudness target, so a resume under different settings encodes afresh.
+    $voiceoverPath = Join-Path $resumeDirectory ("voiceover-$audioBitrate-$([int][Math]::Round(-$loudnessTarget)).m4a")
+    $script:Voiceover = [pscustomobject]@{
+        Analysis = $null
+        Process = $null
+        Filter = ''
+        Bitrate = $audioBitrate
+        Path = $voiceoverPath
+        PartialPath = Join-Path $resumeDirectory 'voiceover.partial.m4a'
+        ErrorPath = Join-Path $resumeDirectory 'voiceover-error.log'
+        Done = (Test-Path -LiteralPath $voiceoverPath -PathType Leaf)
+    }
+    if (-not $script:Voiceover.Done) {
+        $script:Voiceover.Analysis = Start-LoudnessAnalysis -AudioPath ([string]$script:Job.AudioPath) -ReportPath (Join-Path $resumeDirectory 'loudness.json') -TargetLufs $loudnessTarget
+    }
+    $voiceoverTick = { Step-VoiceoverEncode -State $script:Voiceover }
 
     $plan = New-SegmentJobs -Backend $backend -SegmentDirectory $segmentDirectory -ThreadsPerLane $threadsPerLane
     try {
-        $completedFrames = Invoke-ParallelSegmentJobs -Jobs $plan.Jobs -CompletedFrames $plan.CompletedFrames -TotalFrames $totalFrames -Fps $fps -MaximumParallel $maximumParallel
+        $completedFrames = Invoke-ParallelSegmentJobs -Jobs $plan.Jobs -CompletedFrames $plan.CompletedFrames -TotalFrames $totalFrames -Fps $fps -MaximumParallel $maximumParallel -OnTick $voiceoverTick
     }
     catch {
         if ($backend -ne 'opencl') { throw }
@@ -603,11 +704,11 @@ try {
         $maximumParallel = $processorLanes
         $threadsPerLane = [Math]::Max(1, [int][Math]::Floor($logicalCores / [double]$maximumParallel))
         $plan = New-SegmentJobs -Backend 'cpu' -SegmentDirectory $segmentDirectory -ThreadsPerLane $threadsPerLane
-        $completedFrames = Invoke-ParallelSegmentJobs -Jobs $plan.Jobs -CompletedFrames $plan.CompletedFrames -TotalFrames $totalFrames -Fps $fps -MaximumParallel $maximumParallel
+        $completedFrames = Invoke-ParallelSegmentJobs -Jobs $plan.Jobs -CompletedFrames $plan.CompletedFrames -TotalFrames $totalFrames -Fps $fps -MaximumParallel $maximumParallel -OnTick $voiceoverTick
     }
 
-    Write-WorkerProgress 95 'Measuring voiceover loudness...'
-    $loudnessFilter = Complete-LoudnessFilter -Analysis $loudnessAnalysis
+    Write-WorkerProgress 95 'Finishing the voiceover...'
+    $voiceoverReady = Complete-VoiceoverEncode -State $script:Voiceover
 
     Write-WorkerProgress 95 'Joining segments and adding the voiceover...'
     $concatPath = Join-Path $resumeDirectory 'segments.txt'
@@ -617,12 +718,17 @@ try {
     }
     [IO.File]::WriteAllLines($concatPath, $concatLines, [Text.UTF8Encoding]::new($false))
     $stagingPath = [string]$script:Job.StagingPath
-    $audioBitrate = if ([string]$script:Job.Settings.Quality -eq 'YouTube') { '384k' } else { '160k' }
     $muxProgress = Join-Path $resumeDirectory 'mux-progress.txt'
     $muxError = Join-Path $resumeDirectory 'mux-error.log'
-    # -ar 48000 after the filter matters: loudnorm resamples internally, and
-    # without it the muxed track can leave at loudnorm's own rate.
-    $muxArguments = @('-y','-hide_banner','-loglevel','error','-nostats','-progress',$muxProgress,'-f','concat','-safe','0','-i',$concatPath,'-i',[string]$script:Job.AudioPath,'-map','0:v:0','-map','1:a:0','-c:v','copy','-af',$loudnessFilter,'-c:a','aac','-b:a',$audioBitrate,'-ar','48000','-ac','2','-shortest','-movflags','+faststart',$stagingPath)
+    if ($voiceoverReady) {
+        $muxArguments = @('-y','-hide_banner','-loglevel','error','-nostats','-progress',$muxProgress,'-f','concat','-safe','0','-i',$concatPath,'-i',$script:Voiceover.Path,'-map','0:v:0','-map','1:a:0','-c','copy','-shortest','-movflags','+faststart',$stagingPath)
+    }
+    else {
+        # -ar 48000 after the filter matters: loudnorm resamples internally, and
+        # without it the muxed track can leave at loudnorm's own rate.
+        $loudnessFilter = if ([string]::IsNullOrWhiteSpace($script:Voiceover.Filter)) { "loudnorm=I=$($loudnessTarget.ToString('0.##', [Globalization.CultureInfo]::InvariantCulture)):TP=-1.5:LRA=11" } else { $script:Voiceover.Filter }
+        $muxArguments = @('-y','-hide_banner','-loglevel','error','-nostats','-progress',$muxProgress,'-f','concat','-safe','0','-i',$concatPath,'-i',[string]$script:Job.AudioPath,'-map','0:v:0','-map','1:a:0','-c:v','copy','-af',$loudnessFilter,'-c:a','aac','-b:a',$audioBitrate,'-ar','48000','-ac','2','-shortest','-movflags','+faststart',$stagingPath)
+    }
     Invoke-TrackedFfmpeg -Arguments $muxArguments -ProgressFile $muxProgress -ErrorFile $muxError -CompletedFrames $totalFrames -CurrentFrames 0 -TotalFrames $totalFrames -Message 'Joining segments and adding the voiceover...'
     if (-not (Test-Path -LiteralPath $stagingPath -PathType Leaf)) { throw 'The final staging video was not created.' }
     if (Test-Path -LiteralPath ([string]$script:Job.DestinationPath) -PathType Leaf) { Remove-Item -LiteralPath ([string]$script:Job.DestinationPath) -Force }
@@ -638,5 +744,15 @@ catch {
     $message = $_.Exception.ToString() + "`r`n" + $_.ScriptStackTrace
     [IO.File]::WriteAllText([string]$script:Job.ErrorPath, $message, [Text.UTF8Encoding]::new($false))
     try { Write-WorkerProgress 0 'Rendering paused. Completed segments were kept for Resume.' } catch {}
+    # The voiceover's helpers outlive this process unless stopped here.
+    try {
+        $voiceoverState = Get-Variable -Name Voiceover -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+        if ($null -ne $voiceoverState) {
+            foreach ($helper in @($voiceoverState.Process, $(if ($null -ne $voiceoverState.Analysis) { $voiceoverState.Analysis.Process }))) {
+                if ($null -ne $helper -and -not $helper.HasExited) { $helper.Kill() }
+            }
+        }
+    }
+    catch {}
     exit 1
 }

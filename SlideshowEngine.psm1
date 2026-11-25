@@ -77,6 +77,85 @@ function Get-MediaDurationSeconds {
     return $duration
 }
 
+function Get-WatermarkFootprint {
+    # Where on the delivery frame a watermark video ever puts a pixel that is
+    # not black, and how many frames one cycle of it lasts, measured on the
+    # same fps and scale the render graphs apply. Screen with black leaves the
+    # picture untouched, so the GPU graph only needs to carry this rectangle;
+    # and because the watermark is played in a loop, one uploaded cycle can be
+    # replayed for a whole segment.
+    #
+    # bbox's threshold is luma above 16, the black of limited-range video, so
+    # the faintest glow of a logo still counts. The rectangle then grows by a
+    # margin for chroma that bleeds past the luma. LoopFrames is 0 - stream
+    # the watermark instead - when one cycle of the rectangle would take more
+    # video memory than a lane should hold.
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$FfmpegPath,
+        [Parameter(Mandatory = $true)][string]$WatermarkPath,
+        [int]$Width = 1920,
+        [int]$Height = 1080,
+        [int]$Fps = 24,
+        [int]$Margin = 8,
+        [long]$MaximumLoopBytes = 384MB
+    )
+
+    $arguments = @(
+        '-hide_banner', '-nostats', '-loglevel', 'info',
+        '-i', $WatermarkPath,
+        # Video only: a watermark .mov often carries an audio track, and its
+        # packets would otherwise be counted as frames.
+        '-map', '0:v:0',
+        '-vf', "fps=$Fps,scale=$Width`:$Height`:flags=bicubic,bbox=min_val=16",
+        '-f', 'framecrc', '-'
+    )
+    $startInfo = [Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $FfmpegPath
+    $startInfo.Arguments = (($arguments | ForEach-Object { if ($_ -match '[\s"]') { '"' + $_.Replace('"', '\"') + '"' } else { $_ } }) -join ' ')
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $process = [Diagnostics.Process]::Start($startInfo)
+    try {
+        $errorTask = $process.StandardError.ReadToEndAsync()
+        $frameLines = $process.StandardOutput.ReadToEnd()
+        $process.WaitForExit()
+        $log = $errorTask.Result
+        if ($process.ExitCode -ne 0) { throw "FFmpeg could not read the watermark: $WatermarkPath" }
+    }
+    finally { $process.Dispose() }
+
+    $frames = @($frameLines -split "`n" | Where-Object { $_ -match '^\s*\d+,' }).Count
+    $x1 = $Width; $y1 = $Height; $x2 = -1; $y2 = -1
+    foreach ($match in [regex]::Matches($log, 'x1:(\d+) x2:(\d+) y1:(\d+) y2:(\d+)')) {
+        $x1 = [Math]::Min($x1, [int]$match.Groups[1].Value)
+        $x2 = [Math]::Max($x2, [int]$match.Groups[2].Value)
+        $y1 = [Math]::Min($y1, [int]$match.Groups[3].Value)
+        $y2 = [Math]::Max($y2, [int]$match.Groups[4].Value)
+    }
+    if ($x2 -lt 0) {
+        # Entirely black: nothing to blend. A token rectangle keeps the graph
+        # uniform.
+        $x = 0; $y = 0; $w = 2; $h = 2
+    }
+    else {
+        $x = [Math]::Max(0, $x1 - $Margin); $y = [Math]::Max(0, $y1 - $Margin)
+        $x -= $x % 2; $y -= $y % 2
+        $right = [Math]::Min($Width, $x2 + 1 + $Margin); $bottom = [Math]::Min($Height, $y2 + 1 + $Margin)
+        $w = $right - $x; $h = $bottom - $y
+        if ($w % 2) { if ($x + $w -lt $Width) { $w++ } else { $x--; $w++ } }
+        if ($h % 2) { if ($y + $h -lt $Height) { $h++ } else { $y--; $h++ } }
+    }
+    $loopFrames = if ($frames -gt 0 -and ([long]$frames * $w * $h * 4) -le $MaximumLoopBytes) { $frames } else { 0 }
+    return [pscustomobject]@{
+        Rect = @($x, $y, $w, $h)
+        Frames = $frames
+        LoopFrames = $loopFrames
+    }
+}
+
 function New-ShuffledIndexCycle {
     param(
         [int]$Count,
@@ -1132,8 +1211,13 @@ function Get-OpenClMotionKernelSource {
     # processor's warp-at-canvas-size followed by a Lanczos downscale.
     param(
         [Parameter(Mandatory = $true)][object[]]$Clips,
-        [int]$FadeFrames = 0
+        [int]$FadeFrames = 0,
+        [int]$Width = 1920,
+        [int]$Height = 1080,
+        [int[]]$WatermarkRect = @(),
+        [switch]$HasCaptions
     )
+    if ($null -eq $WatermarkRect -or $WatermarkRect.Count -ne 4) { $WatermarkRect = @(0, 0, $Width, $Height) }
 
     $builder = [Text.StringBuilder]::new()
     [void]$builder.Append(@'
@@ -1240,6 +1324,67 @@ __kernel void crossfade(__write_only image2d_t destination, unsigned int frame_i
 
 "@)
     }
+
+    # deliver: the Screen blend with the watermark, the caption overlay, and
+    # the conversion to BT.709 limited-range YUV 4:2:0, written as one gray
+    # image: Y (Width x Height) on top, then U and V side by side beneath it.
+    # The arithmetic is the processor graph's: Screen in gamma-encoded RGB,
+    # 1 - (1 - picture)(1 - watermark), and the caption laid over that with
+    # its own alpha. Chroma is the mean of each 2x2 block, as swscale's
+    # 4:2:0 conversion takes it.
+    $captionParameter = if ($HasCaptions) { ",`n                      __read_only image2d_t caption" } else { '' }
+    $captionArgument = if ($HasCaptions) { ', caption' } else { '' }
+    $captionBlend = if ($HasCaptions) {
+        @'
+    float4 c = read_imagef(caption, sampler, pos);
+    float alpha = clamp(c.w, 0.0f, 1.0f);
+    a.xyz = c.xyz * alpha + a.xyz * (1.0f - alpha);
+'@
+    } else { '' }
+    $chromaWidth = [int]($Width / 2)
+    $chromaHeight = [int]($Height / 2)
+    [void]$builder.Append(@"
+inline float3 composite(__read_only image2d_t picture, __read_only image2d_t watermark$captionParameter, int2 pos)
+{
+    const sampler_t sampler = CLK_NORMALIZED_COORDS_FALSE |
+                              CLK_ADDRESS_CLAMP_TO_EDGE |
+                              CLK_FILTER_NEAREST;
+    float4 a = read_imagef(picture, sampler, pos);
+    int2 inside = pos - (int2)($($WatermarkRect[0]), $($WatermarkRect[1]));
+    if (inside.x >= 0 && inside.y >= 0 && inside.x < $($WatermarkRect[2]) && inside.y < $($WatermarkRect[3])) {
+        float4 b = read_imagef(watermark, sampler, inside);
+        a.xyz = 1.0f - (1.0f - a.xyz) * (1.0f - b.xyz);
+    }
+$captionBlend    return clamp(a.xyz, 0.0f, 1.0f);
+}
+
+__kernel void deliver(__write_only image2d_t destination, unsigned int frame_index,
+                      __read_only image2d_t layout,
+                      __read_only image2d_t picture,
+                      __read_only image2d_t watermark$captionParameter)
+{
+    int2 pos = (int2)(get_global_id(0), get_global_id(1));
+    const float3 luma_weights = (float3)(0.2126f, 0.7152f, 0.0722f);
+    if (pos.x >= $Width || pos.y >= $($Height + $chromaHeight)) return;
+    if (pos.y < $Height) {
+        float3 rgb = composite(picture, watermark$captionArgument, pos);
+        float y = 16.0f + 219.0f * dot(rgb, luma_weights);
+        write_imagef(destination, pos, (float4)(y / 255.0f, 0.0f, 0.0f, 1.0f));
+        return;
+    }
+    int is_v = pos.x >= $chromaWidth;
+    int2 block = (int2)((is_v ? pos.x - $chromaWidth : pos.x) * 2, (pos.y - $Height) * 2);
+    float3 rgb = (composite(picture, watermark$captionArgument, block) +
+                  composite(picture, watermark$captionArgument, block + (int2)(1, 0)) +
+                  composite(picture, watermark$captionArgument, block + (int2)(0, 1)) +
+                  composite(picture, watermark$captionArgument, block + (int2)(1, 1))) * 0.25f;
+    float luma = dot(rgb, luma_weights);
+    float value = is_v ? 128.0f + 224.0f * (rgb.x - luma) / 1.5748f
+                       : 128.0f + 224.0f * (rgb.z - luma) / 1.8556f;
+    write_imagef(destination, pos, (float4)(value / 255.0f, 0.0f, 0.0f, 1.0f));
+}
+
+"@)
     return $builder.ToString()
 }
 
@@ -1248,12 +1393,12 @@ function New-OpenClFilterGraph {
     # OpenCL. Each photograph is prepared once on the processor exactly as the
     # processor graph prepares it (blurred background, centred photo), uploaded
     # once, and from then on every frame is generated on the card: the Ken
-    # Burns crop, the clip joins, the Screen blend with the watermark and the
-    # optional caption overlay. Only the finished frame comes back, to be
-    # converted to BT.709 YUV and encoded.
+    # Burns crop, the clip joins, the Screen blend with the watermark, the
+    # optional caption overlay and the conversion to BT.709 YUV. Only the
+    # finished YUV planes come back, packed into one gray frame, to be encoded.
     #
-    # Measured on the production laptop (RTX A4000, 8 lanes, real photographs):
-    # the processor graph renders 3.4x realtime; this design 9-11x.
+    # Measured on the production laptop (RTX A4000, 4 lanes, real photographs):
+    # the processor graph renders a segment at 3.5x realtime; this design 13x.
     #
     # The caller writes KernelSource to MotionKernelPath before running FFmpeg.
     #
@@ -1275,8 +1420,12 @@ function New-OpenClFilterGraph {
         [Parameter(Mandatory = $true)]
         [string]$MotionKernelPath,
 
-        [Parameter(Mandatory = $true)]
-        [string]$OpenClScreenKernelPath,
+        # x, y, width, height of the part of the delivery frame the watermark
+        # ever touches (Get-WatermarkFootprint); empty means the whole frame.
+        [int[]]$WatermarkRect = @(),
+        # Frames in one cycle of the watermark; 0 streams it instead of
+        # replaying one uploaded cycle.
+        [int]$WatermarkLoopFrames = 0,
 
         [double]$ZoomMaximumPercent = 110.0,
         [double]$BlurAmount = 40.0,
@@ -1333,7 +1482,6 @@ function New-OpenClFilterGraph {
     $workingHeight = [int]([Math]::Ceiling(($Height * $workingScale) / 2.0) * 2)
     $captionForceStyle = Get-CaptionForceStyle -Preset $CaptionPreset -CaptionStyle $CaptionStyle
     $motionKernelFilterPath = ConvertTo-FilterPath $MotionKernelPath
-    $screenKernelFilterPath = ConvertTo-FilterPath $OpenClScreenKernelPath
     $clock = "settb=1/$fps,setpts=N"
 
     $filters = [System.Collections.Generic.List[string]]::new()
@@ -1427,24 +1575,58 @@ function New-OpenClFilterGraph {
         $filters.Add("$($pieces -join '')concat=n=$($pieces.Count)`:v=1`:a=0,trim=end_frame=$RenderFrames,$clock[vseq]")
     }
 
-    $filters.Add("[1:v]fps=$fps,scale=$Width`:$Height`:flags=bicubic,setsar=1,trim=end_frame=$RenderFrames,format=rgba,hwupload,$clock[watermarkocl]")
-    # rgba is full-range RGB; the encoder is told the result is BT.709 limited
-    # range, so convert with exactly that matrix. The processor graph used to
-    # leave this to swscale's default, which is BT.601.
-    $toDelivery = "hwdownload,format=rgba,scale=out_color_matrix=bt709:out_range=tv,format=yuv420p,trim=end_frame=$RenderFrames,setpts=N/($fps*TB)"
-    if ([string]::IsNullOrWhiteSpace($SubtitlePath)) {
-        $filters.Add("[vseq][watermarkocl]program_opencl=source='$screenKernelFilterPath':kernel=screen_rgb:inputs=2:shortest=0:repeatlast=1,$toDelivery[vout]")
+    # The watermark. Measured, streaming it in whole was the most expensive
+    # thing left in this graph: every frame decoded, converted to RGBA and
+    # uploaded at 1920x1080 cost more than all the motion put together, and
+    # taking it away alone took a segment from 7 to 13x realtime. Two things
+    # make it nearly free:
+    #   - only the rectangle that is ever non-black travels (see
+    #     Get-WatermarkFootprint). Screen with black leaves the picture as it
+    #     is, so nothing outside it changes; channel logos cover 3-9 percent
+    #     of the frame.
+    #   - a watermark is a short loop, so with WatermarkLoopFrames set one
+    #     cycle is uploaded and the loop filter replays it from video memory.
+    $rect = if ($null -ne $WatermarkRect -and $WatermarkRect.Count -eq 4) { $WatermarkRect } else { @(0, 0, $Width, $Height) }
+    $watermarkChain = "[1:v]fps=$fps,scale=$Width`:$Height`:flags=bicubic,setsar=1,crop=$($rect[2])`:$($rect[3])`:$($rect[0])`:$($rect[1])"
+    if ($WatermarkLoopFrames -gt 0) {
+        $watermarkChain += ",trim=end_frame=$WatermarkLoopFrames,format=rgba,hwupload,loop=loop=-1:size=$WatermarkLoopFrames`:start=0,trim=end_frame=$RenderFrames"
     }
     else {
+        $watermarkChain += ",trim=end_frame=$RenderFrames,format=rgba,hwupload"
+    }
+    $filters.Add("$watermarkChain,$clock[watermarkocl]")
+
+    # The finished frame comes back as one gray image holding the BT.709 YUV
+    # 4:2:0 planes side by side - Y on top, U and V halves beneath - written
+    # by the deliver kernel. That is 3.1 MB a frame instead of 8.3 MB of
+    # RGBA, and no RGB to YUV conversion is left for the processor: crop and
+    # mergeplanes only point at and copy planes. program_opencl writes in the
+    # pixel format of its first input, so a gray "layout" frame, uploaded
+    # once, goes first. NVENC's own RGB input was tried and rejected: it
+    # converts with BT.601, which shifts every colour of a BT.709 video.
+    $layoutHeight = $Height + ($Height / 2)
+    $filters.Add("color=c=black:s=$Width`x$layoutHeight`:r=$fps,format=gray,trim=end_frame=1,hwupload,loop=loop=$($RenderFrames - 1)`:size=1`:start=0,trim=end_frame=$RenderFrames,$clock[layout]")
+    $hasCaptions = -not [string]::IsNullOrWhiteSpace($SubtitlePath)
+    if ($hasCaptions) {
         $subtitleFilterPath = ConvertTo-FilterPath $SubtitlePath
         $filters.Add("color=c=black@0.0:s=$Width`x$Height`:r=$fps,format=rgba,subtitles=filename='$subtitleFilterPath':alpha=1:force_style='$captionForceStyle',trim=end_frame=$RenderFrames,hwupload,$clock[captionocl]")
-        $filters.Add("[vseq][watermarkocl][captionocl]program_opencl=source='$screenKernelFilterPath':kernel=screen_caption_rgb:inputs=3:shortest=0:repeatlast=1,$toDelivery[vout]")
+        $filters.Add("[layout][vseq][watermarkocl][captionocl]program_opencl=source='$motionKernelFilterPath':kernel=deliver:inputs=4:s=$Width`x$layoutHeight`:shortest=0:repeatlast=1[packed]")
     }
+    else {
+        $filters.Add("[layout][vseq][watermarkocl]program_opencl=source='$motionKernelFilterPath':kernel=deliver:inputs=3:s=$Width`x$layoutHeight`:shortest=0:repeatlast=1[packed]")
+    }
+    $halfWidth = $Width / 2
+    $halfHeight = $Height / 2
+    $filters.Add("[packed]hwdownload,format=gray,split=3[packy][packu][packv]")
+    $filters.Add("[packy]crop=$Width`:$Height`:0:0[planey]")
+    $filters.Add("[packu]crop=$halfWidth`:$halfHeight`:0:$Height[planeu]")
+    $filters.Add("[packv]crop=$halfWidth`:$halfHeight`:$halfWidth`:$Height[planev]")
+    $filters.Add("[planey][planeu][planev]mergeplanes=map0s=0:map0p=0:map1s=1:map1p=0:map2s=2:map2p=0:format=yuv420p,setparams=range=tv:colorspace=bt709:color_primaries=bt709:color_trc=bt709,trim=end_frame=$RenderFrames,setpts=N/($fps*TB)[vout]")
 
     return [pscustomobject]@{
         ImageInputs = $uniquePaths.ToArray()
         FilterText = ($filters -join ";`r`n") + "`r`n"
-        KernelSource = Get-OpenClMotionKernelSource -Clips $kernelClips.ToArray() -FadeFrames $fadeFrames
+        KernelSource = Get-OpenClMotionKernelSource -Clips $kernelClips.ToArray() -FadeFrames $fadeFrames -Width $Width -Height $Height -WatermarkRect $rect -HasCaptions:$hasCaptions
         ActiveItemCount = $activeItems.Count
         RenderFrames = $RenderFrames
         DurationSeconds = $RenderFrames / [double]$fps
@@ -1569,6 +1751,7 @@ Export-ModuleMember -Function @(
     'New-VulkanFilterGraph',
     'New-OpenClFilterGraph',
     'Get-OpenClMotionKernelSource',
+    'Get-WatermarkFootprint',
     'Format-CaptionText',
     'Copy-SrtWithWordWrapping',
     'Get-EncodingArguments',

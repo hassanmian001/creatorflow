@@ -251,7 +251,7 @@ Assert-True ($vulkanCaptionGraph.FilterText -match 'hwdownload') 'Burned caption
 Assert-True (-not ($vulkanCaptionGraph.FilterText -match 'overlay_vulkan')) 'Vulkan alpha overlay is avoided on older Pascal drivers'
 
 foreach ($fade in @(0.0, 0.5)) {
-    $openClGraph = New-OpenClFilterGraph -Timeline $plan -RenderFrames 720 -MotionKernelPath 'C:\run\motion.cl' -OpenClScreenKernelPath 'C:\app\Shaders\screen.cl' -CrossfadeSeconds $fade -OverscanScale 1.1
+    $openClGraph = New-OpenClFilterGraph -Timeline $plan -RenderFrames 720 -MotionKernelPath 'C:\run\motion.cl' -WatermarkRect @(696, 792, 528, 288) -WatermarkLoopFrames 221 -CrossfadeSeconds $fade -OverscanScale 1.1
     $text = $openClGraph.FilterText
     $clipCount = $openClGraph.ActiveItemCount
     Assert-True ($openClGraph.RenderFrames -eq 720) 'OpenCL frame count'
@@ -261,10 +261,17 @@ foreach ($fade in @(0.0, 0.5)) {
     Assert-True ($openClGraph.KernelSource -match 'CUBIC_A \(-0\.60f\)') 'OpenCL motion uses the processor graph''s cubic'
     Assert-True ($text -match 'hwupload,loop=' -or $text -match 'hwupload\[base') 'Each photograph is uploaded once, before the loop'
     Assert-True ($text -match ':s=1920x1080') 'Motion kernels render straight to the delivery size'
-    Assert-True ($text -match 'kernel=screen_rgb:inputs=2') 'Watermark Screen blend runs on the GPU'
+    Assert-True ($text -match 'kernel=deliver:inputs=3:s=1920x1620') 'Watermark blend and YUV conversion run on the GPU into one packed gray frame'
+    Assert-True ($text -match 'crop=528:288:696:792') 'Only the watermark''s rectangle is carried'
+    Assert-True ($text -match 'trim=end_frame=221,format=rgba,hwupload,loop=loop=-1:size=221') 'One watermark cycle is uploaded and replayed'
+    Assert-True ($openClGraph.KernelSource -match 'inside\.x < 528 && inside\.y < 288') 'Deliver kernel blends only inside the watermark rectangle'
+    Assert-True ($openClGraph.KernelSource -match '0\.2126f, 0\.7152f, 0\.0722f') 'Deliver kernel converts with BT.709 weights'
+    Assert-True ($text -match 'setpts=N\[layout\]') 'Layout frame is on the integer frame clock'
     Assert-True ($text -match '\[watermarkocl\]' -and $text -match 'settb=1/24,setpts=N\[watermarkocl\]') 'Watermark is put on the integer frame clock before the multi-input kernel'
     Assert-True ($text -match 'settb=1/24,setpts=N\[vseq\]') 'Picture is put on the same integer frame clock before the multi-input kernel'
-    Assert-True ($text -match 'out_color_matrix=bt709:out_range=tv') 'GPU output is converted to YUV with the BT.709 matrix it is tagged with'
+    Assert-True ($text -match 'mergeplanes=map0s=0:map0p=0:map1s=1:map1p=0:map2s=2:map2p=0:format=yuv420p') 'Packed planes are reassembled as YUV 4:2:0'
+    Assert-True ($text -match 'setparams=range=tv:colorspace=bt709') 'Reassembled frames are tagged BT.709 limited range'
+    Assert-True (-not ($text -match 'format=rgba,scale=')) 'No RGB to YUV conversion is left for the processor'
     Assert-True (-not ($text -match 'xfade_opencl')) 'xfade_opencl is never used: it skips ahead when chained'
     Assert-True (-not $text.TrimEnd().EndsWith(';')) 'OpenCL filter graph has no empty trailing chain'
     if ($fade -gt 0) {
@@ -278,8 +285,10 @@ foreach ($fade in @(0.0, 0.5)) {
         Assert-True ($text -match "concat=n=$($clipCount):v=1:a=0") 'Hard cuts concatenate the clips'
     }
 }
-$openClCaptionGraph = New-OpenClFilterGraph -Timeline $plan -RenderFrames 240 -MotionKernelPath 'C:\run\motion.cl' -OpenClScreenKernelPath 'C:\app\Shaders\screen.cl' -SubtitlePath 'C:\captions\video.srt'
-Assert-True ($openClCaptionGraph.FilterText -match 'kernel=screen_caption_rgb:inputs=3') 'OpenCL burned captions are composited on the GPU'
+$openClCaptionGraph = New-OpenClFilterGraph -Timeline $plan -RenderFrames 240 -MotionKernelPath 'C:\run\motion.cl' -SubtitlePath 'C:\captions\video.srt'
+Assert-True ($openClCaptionGraph.FilterText -match 'kernel=deliver:inputs=4') 'OpenCL burned captions are composited on the GPU'
+Assert-True ($openClCaptionGraph.KernelSource -match '__read_only image2d_t caption') 'Deliver kernel takes the caption layer'
+Assert-True ($openClCaptionGraph.FilterText -match 'crop=1920:1080:0:0,') 'Without a measured footprint the whole watermark frame is carried'
 Assert-True ($openClCaptionGraph.FilterText -match 'setpts=N\[captionocl\]') 'Caption layer is on the integer frame clock'
 
 $estimated = Get-EstimatedOutputSizeMb -DurationSeconds 1200 -Quality Compact

@@ -2600,7 +2600,7 @@ function Test-OpenClMotion {
             )
         }
         $kernelPath = Get-MotionKernelSourcePath -Directory $testDirectory
-        $definition = New-OpenClFilterGraph -Timeline $timeline -RenderFrames 48 -MotionKernelPath $kernelPath -OpenClScreenKernelPath $script:ScreenKernelPath -CrossfadeSeconds 0.25 -OverscanScale 1.1 -Width 640 -Height 360
+        $definition = New-OpenClFilterGraph -Timeline $timeline -RenderFrames 48 -MotionKernelPath $kernelPath -WatermarkRect @(32, 200, 96, 64) -WatermarkLoopFrames 24 -CrossfadeSeconds 0.25 -OverscanScale 1.1 -Width 640 -Height 360
         [IO.File]::WriteAllText($kernelPath, $definition.KernelSource, [Text.UTF8Encoding]::new($false))
         $filterPath = Join-Path $testDirectory 'filter.txt'
         [IO.File]::WriteAllText($filterPath, $definition.FilterText, [Text.UTF8Encoding]::new($false))
@@ -2700,7 +2700,7 @@ function Select-AvailableFilterBackend {
     $script:EncoderBaseText = [string]$EncoderText.Text
     $script:FilterBackend = 'cpu'
     $script:FilterVulkanDeviceIndex = $null
-    if ($script:SelectedEncoder -eq 'h264_nvenc' -and (Test-Path -LiteralPath $script:ScreenKernelPath -PathType Leaf)) {
+    if ($script:SelectedEncoder -eq 'h264_nvenc') {
         $StatusText.Text = 'Checking GPU motion effects...'
         $window.Dispatcher.Invoke([action]{}, [Windows.Threading.DispatcherPriority]::Background)
         $device = Find-NvidiaOpenClDevice -NvidiaOnly
@@ -6684,11 +6684,22 @@ function Start-VideoRender {
         $useOpenClMotion = $filterBackend -eq 'opencl' -and $encoder -eq 'h264_nvenc' -and $null -ne $script:OpenClDevice
         if ($useOpenClMotion) {
             $motionKernelPath = Get-MotionKernelSourcePath -Directory $runDirectory
+            # The same watermark measurement the render worker makes, so the
+            # preview uploads only the logo's rectangle, once.
+            $watermarkRect = @()
+            $watermarkLoopFrames = 0
+            try {
+                $footprint = Get-WatermarkFootprint -FfmpegPath $script:FfmpegPath -WatermarkPath $watermarkPath -Fps ([int]$script:CurrentPlan.Fps)
+                $watermarkRect = [int[]]$footprint.Rect
+                $watermarkLoopFrames = [int]$footprint.LoopFrames
+            }
+            catch { Write-ToolDiagnostic 'Could not measure the watermark; the preview streams it whole.' $_.Exception }
             $definition = New-OpenClFilterGraph `
                 -Timeline $script:CurrentPlan `
                 -RenderFrames $renderFrames `
                 -MotionKernelPath $motionKernelPath `
-                -OpenClScreenKernelPath $script:ScreenKernelPath `
+                -WatermarkRect $watermarkRect `
+                -WatermarkLoopFrames $watermarkLoopFrames `
                 -ZoomMaximumPercent $settings.ZoomMaximum `
                 -BlurAmount $settings.BlurAmount `
                 -BackgroundBrightnessPercent $settings.BackgroundBrightness `

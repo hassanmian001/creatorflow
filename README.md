@@ -71,7 +71,7 @@ A portable Windows 11 tool for turning a folder of images and a voiceover into a
 - Batch-renders saved project files sequentially too.
 - Keeps persistent render history with completed, failed, paused, and resumable final and batch jobs.
 - Uses NVIDIA NVENC for H.264 encoding where the graphics card provides it.
-- On NVIDIA, renders motion effects, crossfades, the watermark's RGB Screen blend and burned captions on the graphics card through OpenCL, about 2.4x faster than the processor; elsewhere the processor produces the same frames.
+- On NVIDIA, renders motion effects, crossfades, the watermark's RGB Screen blend and burned captions on the graphics card through OpenCL. A 20-minute video takes about 1.8 minutes instead of 6.7. Elsewhere the processor produces the same frames.
 - Skips caption rendering entirely when **SRT only** is selected.
 - Supports **Burned only** output when captions should be embedded without creating a separate SRT file.
 - Includes ten reference-matched caption presets covering bold outlined YouTube,
@@ -437,17 +437,38 @@ On an NVIDIA card with NVENC, motion effects run on the graphics card through
 OpenCL. Each photograph is prepared once on the processor (blurred background,
 centred photo), uploaded once, and from then on every frame is generated on the
 card: the Ken Burns crop, the joins and crossfades, the Screen blend with the
-watermark, and burned captions. NVDEC decodes the watermark video. Only the
-finished frame comes back, to be converted to BT.709 and encoded.
+watermark, burned captions, and the conversion to BT.709 YUV. Only the finished
+YUV planes come back to be encoded, packed into one gray frame. That is 3.1 MB
+per frame instead of 8.3 MB of RGBA, and the processor does no colour
+conversion.
+
+The watermark is measured once per video. Get-WatermarkFootprint finds the
+rectangle it ever lights up; on every channel's watermark nothing outside that
+rectangle is ever non-black. It also counts the frames in one cycle. Each
+segment uploads that rectangle for a single cycle and replays it from video
+memory. Streaming the full 1080p watermark through every frame had cost more
+than all the motion put together.
+
+The voiceover's loudness pass and AAC encode run alongside the video segments,
+so the final join only copies streams. Run after the segments, they had added
+51 seconds to a 20-minute video.
 
 Measured on an RTX A4000 laptop with real channel photographs:
 
 | | Processor | OpenCL |
 |---|---|---|
-| One 30-second segment, 8 lanes | 3.5x realtime | 8.4x realtime |
-| A whole 20.3-minute video, worker end to end | 6.7 minutes (3.0x) | 3.4 minutes (6.0x) |
-| Lossless difference from the processor render | | 48.6 dB PSNR, SSIM 0.997 |
-| The same segment rendered 16 times under full load | | 16 identical videos, 720/720 frames, no repeats |
+| One 30-second segment | 3.5x realtime (8 lanes) | 13x realtime (4 lanes) |
+| A whole 20.3-minute video, worker end to end | 6.7 minutes (3.0x) | 1.8 minutes (11.3x) |
+| Lossless difference from the processor render | | 48.3 dB PSNR, SSIM 0.997 |
+| The same segment rendered 16 times under full load, with crossfades | | 16 identical videos, 720/720 frames, no repeats |
+
+The GPU path uses at most four lanes, and one per 2 GB of video memory. Four
+lanes peaked at 4.9 GB on the 8 GB card. Eight lanes overflowed it, and the
+render dropped to a quarter of its speed.
+
+NVENC can take RGB input, but it converts with BT.601, which shifts every
+colour of a BT.709 video (a test red of C8 1E 1E came back as D5 2C 1A). That
+is why the YUV conversion happens in the kernel.
 
 The OpenCL kernel copies the processor graph's motion exactly, including its
 cubic (a = -0.60) and its frame numbering, so a video that falls back to the
