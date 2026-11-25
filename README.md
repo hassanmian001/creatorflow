@@ -71,8 +71,8 @@ A portable Windows 11 tool for turning a folder of images and a voiceover into a
 - Batch-renders saved project files sequentially too.
 - Keeps persistent render history with completed, failed, paused, and resumable final and batch jobs.
 - Uses NVIDIA NVENC for H.264 encoding where the graphics card provides it.
-- Uses a custom OpenCL compositor for colour-correct RGB Screen blending so the watermark does not crush shadows or posterize photos.
-- Composites burned captions on the GPU, or skips that work when **SRT only** is selected.
+- On NVIDIA, renders motion effects, crossfades, the watermark's RGB Screen blend and burned captions on the graphics card through OpenCL, about 2.4x faster than the processor; elsewhere the processor produces the same frames.
+- Skips caption rendering entirely when **SRT only** is selected.
 - Supports **Burned only** output when captions should be embedded without creating a separate SRT file.
 - Includes ten reference-matched caption presets covering bold outlined YouTube,
   newsroom, minimal, boxed, colored, documentary, upper-safe, and compact styles.
@@ -369,9 +369,9 @@ The tool measures the machine it finds itself on rather than assuming:
 | It checks | What it does with the answer |
 |---|---|
 | Video encoder | Probes NVIDIA NVENC, then AMD AMF, then NVIDIA Vulkan, then Intel Quick Sync, and finally falls back to CPU encoding. Each probe encodes a real 1920x1080 frame, because hardware encoders reject frames below a minimum size and would otherwise report themselves as missing. The chosen one is named in the top-right of the window. |
-| Motion-effects processor | Always the processor. A Vulkan graph exists and is faster, but it does not reproduce itself — see **GPU acceleration** below. |
+| Motion-effects processor | The graphics card through OpenCL on an NVIDIA card with NVENC that passes a short test render; otherwise the processor. See **GPU acceleration** below. |
 | Processor cores and installed memory | Picks how many 30-second segments render at once — 1 lane on a small laptop, up to 6 on a workstation. |
-| OpenCL device | Only used for the GPU watermark and caption compositor, and only on NVIDIA. Every other machine does that step on the CPU, with identical output. |
+| OpenCL device | The NVIDIA OpenCL device, found by name, runs motion effects, the watermark blend and captions. With none, all of that runs on the processor, and the frames differ from the GPU's by about 48 dB, which no one can see. |
 
 So it runs anywhere; what changes is how long a render takes. A machine with no
 supported GPU encoder still produces the same video through `libx264`, just slower.
@@ -433,8 +433,42 @@ Quadro P620 driver provides. The included FFmpeg 7.1.1 build uses a compatible
 NVENC API, so H.264 encoding works on the P620 without downgrading the NVIDIA
 driver.
 
-Motion effects run on the processor. The engine also contains a Vulkan/libplacebo
-graph that performs the animated crop on the graphics card, and it is not used.
+On an NVIDIA card with NVENC, motion effects run on the graphics card through
+OpenCL. Each photograph is prepared once on the processor (blurred background,
+centred photo), uploaded once, and from then on every frame is generated on the
+card: the Ken Burns crop, the joins and crossfades, the Screen blend with the
+watermark, and burned captions. NVDEC decodes the watermark video. Only the
+finished frame comes back, to be converted to BT.709 and encoded.
+
+Measured on an RTX A4000 laptop with real channel photographs:
+
+| | Processor | OpenCL |
+|---|---|---|
+| One 30-second segment, 8 lanes | 3.5x realtime | 8.4x realtime |
+| A whole 20.3-minute video, worker end to end | 6.7 minutes (3.0x) | 3.4 minutes (6.0x) |
+| Lossless difference from the processor render | | 48.6 dB PSNR, SSIM 0.997 |
+| The same segment rendered 16 times under full load | | 16 identical videos, 720/720 frames, no repeats |
+
+The OpenCL kernel copies the processor graph's motion exactly, including its
+cubic (a = -0.60) and its frame numbering, so a video that falls back to the
+processor halfway through a batch looks the same as the rest. Before the first
+render of a session the tool runs a two-second test render on the card; any
+machine where that fails, or that has no NVIDIA OpenCL device, uses the
+processor. If a GPU render fails partway, the render worker starts that video
+again on the processor by itself, in a separate folder, so the two renderers'
+segments are never joined into one video.
+
+Two FFmpeg pitfalls this design avoids. `program_opencl` produces a frame for
+every distinct timestamp across its inputs, so every input to a multi-input
+kernel is first put on the same integer clock (`settb=1/fps,setpts=N`). An
+earlier OpenCL compositor skipped that step, and its inputs' timestamps differed
+by a rounding error, so every frame came out twice. That gave 103 repeated
+frames in 382 and motion at about 17 FPS. Second, `xfade_opencl` skips ahead
+when chained, so crossfades use their own kernel.
+
+Elsewhere (AMD, Intel, no NVENC) motion effects run on the processor. The engine
+also contains a Vulkan/libplacebo graph that performs the animated crop on the
+graphics card, and it is not used.
 
 It does not reproduce itself. Rendering one 30-second segment repeatedly from
 identical inputs on an RTX A4000 produced a different video each time, differing by
@@ -444,9 +478,11 @@ six lanes as well as one. A renderer that is usually right is worse than a slowe
 one that is always right, because nothing downstream can tell the difference until
 somebody watches the finished video.
 
-It is also no longer worth the risk. That graph earned its place when every frame
-was generated twice for shutter blur; with that gone it measured 33.7 seconds
-against the processor's 34.3 on the same photographs and lane count — two percent.
+When it was set aside it measured 33.7 seconds against the processor's 34.3 on the
+same photographs and lane count, two percent. That comparison was made against
+the old whole-pixel `zoompan` processor graph, one day before the far heavier
+sub-pixel `perspective` warp replaced it, so it no longer describes the processor
+graph's cost. That is why the OpenCL path above was worth building.
 
 Vulkan's own H.264 encoder uses the processor graph too. It only accepts frames
 that are already on the graphics card, so the graph uploads each finished frame as

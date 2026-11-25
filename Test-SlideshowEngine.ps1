@@ -250,6 +250,38 @@ Assert-True ($vulkanCaptionGraph.FilterText -match 'subtitles=') 'Vulkan burned 
 Assert-True ($vulkanCaptionGraph.FilterText -match 'hwdownload') 'Burned captions use the compatible libass CPU stage'
 Assert-True (-not ($vulkanCaptionGraph.FilterText -match 'overlay_vulkan')) 'Vulkan alpha overlay is avoided on older Pascal drivers'
 
+foreach ($fade in @(0.0, 0.5)) {
+    $openClGraph = New-OpenClFilterGraph -Timeline $plan -RenderFrames 720 -MotionKernelPath 'C:\run\motion.cl' -OpenClScreenKernelPath 'C:\app\Shaders\screen.cl' -CrossfadeSeconds $fade -OverscanScale 1.1
+    $text = $openClGraph.FilterText
+    $clipCount = $openClGraph.ActiveItemCount
+    Assert-True ($openClGraph.RenderFrames -eq 720) 'OpenCL frame count'
+    Assert-True (([regex]::Matches($text, 'kernel=clip_\d+')).Count -eq $clipCount) 'OpenCL graph runs one motion kernel per clip'
+    Assert-True (([regex]::Matches($openClGraph.KernelSource, '__kernel void clip_\d+')).Count -eq $clipCount) 'OpenCL program defines one kernel per clip'
+    Assert-True ($openClGraph.KernelSource -match 'start \+ 1\.0f \+ \(float\)frame_index') 'OpenCL motion counts frames from 1, like perspective'
+    Assert-True ($openClGraph.KernelSource -match 'CUBIC_A \(-0\.60f\)') 'OpenCL motion uses the processor graph''s cubic'
+    Assert-True ($text -match 'hwupload,loop=' -or $text -match 'hwupload\[base') 'Each photograph is uploaded once, before the loop'
+    Assert-True ($text -match ':s=1920x1080') 'Motion kernels render straight to the delivery size'
+    Assert-True ($text -match 'kernel=screen_rgb:inputs=2') 'Watermark Screen blend runs on the GPU'
+    Assert-True ($text -match '\[watermarkocl\]' -and $text -match 'settb=1/24,setpts=N\[watermarkocl\]') 'Watermark is put on the integer frame clock before the multi-input kernel'
+    Assert-True ($text -match 'settb=1/24,setpts=N\[vseq\]') 'Picture is put on the same integer frame clock before the multi-input kernel'
+    Assert-True ($text -match 'out_color_matrix=bt709:out_range=tv') 'GPU output is converted to YUV with the BT.709 matrix it is tagged with'
+    Assert-True (-not ($text -match 'xfade_opencl')) 'xfade_opencl is never used: it skips ahead when chained'
+    Assert-True (-not $text.TrimEnd().EndsWith(';')) 'OpenCL filter graph has no empty trailing chain'
+    if ($fade -gt 0) {
+        $fadeCount = ([regex]::Matches($text, 'kernel=crossfade')).Count
+        Assert-True ($fadeCount -eq ($clipCount - 1)) 'One crossfade per join'
+        Assert-True ($openClGraph.KernelSource -match '__kernel void crossfade') 'Crossfade kernel is emitted when fading'
+        Assert-True ($text -match "concat=n=$($clipCount + $fadeCount):v=1:a=0") 'Clip bodies and fades are joined in order'
+    }
+    else {
+        Assert-True (-not ($openClGraph.KernelSource -match 'crossfade')) 'No crossfade kernel without fades'
+        Assert-True ($text -match "concat=n=$($clipCount):v=1:a=0") 'Hard cuts concatenate the clips'
+    }
+}
+$openClCaptionGraph = New-OpenClFilterGraph -Timeline $plan -RenderFrames 240 -MotionKernelPath 'C:\run\motion.cl' -OpenClScreenKernelPath 'C:\app\Shaders\screen.cl' -SubtitlePath 'C:\captions\video.srt'
+Assert-True ($openClCaptionGraph.FilterText -match 'kernel=screen_caption_rgb:inputs=3') 'OpenCL burned captions are composited on the GPU'
+Assert-True ($openClCaptionGraph.FilterText -match 'setpts=N\[captionocl\]') 'Caption layer is on the integer frame clock'
+
 $estimated = Get-EstimatedOutputSizeMb -DurationSeconds 1200 -Quality Compact
 Assert-True ($estimated -eq 324) 'Twenty-minute compact size estimate'
 

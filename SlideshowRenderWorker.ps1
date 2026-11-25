@@ -408,6 +408,122 @@ function New-SegmentSubtitle {
     return $DestinationPath
 }
 
+function New-SegmentJobs {
+    # The FFmpeg command for every segment of the video not already finished
+    # in SegmentDirectory, on one filter backend. Reads the job settings the
+    # main block works out before calling it.
+    param(
+        [ValidateSet('opencl', 'vulkan', 'cpu')][string]$Backend,
+        [string]$SegmentDirectory,
+        [int]$ThreadsPerLane
+    )
+    New-Item -ItemType Directory -Path $SegmentDirectory -Force | Out-Null
+    $completed = 0
+    $jobs = [Collections.Generic.List[object]]::new()
+    for ($segmentIndex = 0; $segmentIndex -lt $segmentCount; $segmentIndex++) {
+        $startFrame = $segmentIndex * $segmentFrames
+        $frameCount = [Math]::Min($segmentFrames, $totalFrames - $startFrame)
+        $durationSeconds = $frameCount / [double]$fps
+        $segmentPath = Join-Path $SegmentDirectory ('segment-{0:D4}.mp4' -f $segmentIndex)
+        if (Test-Segment -Path $segmentPath -ExpectedSeconds $durationSeconds) {
+            $completed += $frameCount
+            Write-WorkerProgress (($completed / [double]$totalFrames) * 94.0) "Reused completed segment $($segmentIndex + 1) of $segmentCount."
+            continue
+        }
+
+        # The preview can only be dropped in whole. Cutting it to a shorter
+        # segment would need a keyframe at the cut, and a stream copy that
+        # silently starts at the previous keyframe would pass the duration
+        # check while holding the wrong frames, so only reuse an exact match.
+        if ($segmentIndex -eq 0 -and [bool]$script:Job.ReusePreview -and $previewSeconds -gt 0 -and
+            [Math]::Abs($previewSeconds - $durationSeconds) -lt 0.35 -and
+            (Test-Path -LiteralPath ([string]$script:Job.PreviewPath) -PathType Leaf)) {
+            $copyError = Join-Path $SegmentDirectory 'preview-reuse-error.log'
+            $copyArgs = @('-y','-hide_banner','-loglevel','error','-i',[string]$script:Job.PreviewPath,'-map','0:v:0','-an','-c:v','copy',$segmentPath)
+            & ([string]$script:Job.FfmpegPath) @copyArgs 2> $copyError
+            if ($LASTEXITCODE -eq 0 -and (Test-Segment -Path $segmentPath -ExpectedSeconds $durationSeconds)) {
+                $completed += $frameCount
+                Write-WorkerProgress (($completed / [double]$totalFrames) * 94.0) 'Reused the approved preview.'
+                continue
+            }
+            if (Test-Path -LiteralPath $segmentPath -PathType Leaf) { Remove-Item -LiteralPath $segmentPath -Force }
+        }
+
+        $slice = New-TimelineSlice -Timeline $timeline -StartFrame $startFrame -FrameCount $frameCount
+        $segmentSrt = ''
+        if ([string]$script:Job.CaptionMode -in @('Burned only', 'Burned + SRT')) {
+            $segmentSrt = New-SegmentSubtitle -SourcePath ([string]$script:Job.CaptionPath) -StartSeconds ($startFrame / [double]$fps) -DurationSeconds $durationSeconds -DestinationPath (Join-Path $SegmentDirectory ('captions-{0:D4}.srt' -f $segmentIndex)) -MaxWordsPerLine $captionWordsPerLine
+        }
+        if ($Backend -eq 'opencl') {
+            $kernelPath = Join-Path $SegmentDirectory ('motion-{0:D4}.cl' -f $segmentIndex)
+            $definition = New-OpenClFilterGraph -Timeline $slice -RenderFrames $frameCount -MotionKernelPath $kernelPath -OpenClScreenKernelPath $screenKernelPath -ZoomMaximumPercent ([double]$script:Job.Settings.ZoomMaximum) -BlurAmount ([double]$script:Job.Settings.BlurAmount) -BackgroundBrightnessPercent ([double]$script:Job.Settings.BackgroundBrightness) -SubtitlePath $segmentSrt -CaptionPreset $captionPreset -CaptionStyle $script:Job.Settings -CrossfadeSeconds (Get-JobCrossfadeSeconds) -OverscanScale (Get-JobOverscanScale) -Width 1920 -Height 1080
+            [IO.File]::WriteAllText($kernelPath, $definition.KernelSource, [Text.UTF8Encoding]::new($false))
+        }
+        elseif ($Backend -eq 'vulkan') {
+            $definition = New-VulkanFilterGraph -Timeline $slice -RenderFrames $frameCount -ZoomMaximumPercent ([double]$script:Job.Settings.ZoomMaximum) -BlurAmount ([double]$script:Job.Settings.BlurAmount) -BackgroundBrightnessPercent ([double]$script:Job.Settings.BackgroundBrightness) -SubtitlePath $segmentSrt -CaptionPreset $captionPreset -CaptionStyle $script:Job.Settings -HardwareOutputFrames ([string]$script:Job.Encoder -eq 'h264_vulkan') -CrossfadeSeconds (Get-JobCrossfadeSeconds) -OverscanScale (Get-JobOverscanScale) -Width 1920 -Height 1080
+        }
+        else {
+            $definition = New-FilterGraph -Timeline $slice -RenderFrames $frameCount -ZoomMaximumPercent ([double]$script:Job.Settings.ZoomMaximum) -BlurAmount ([double]$script:Job.Settings.BlurAmount) -BackgroundBrightnessPercent ([double]$script:Job.Settings.BackgroundBrightness) -SubtitlePath $segmentSrt -CaptionPreset $captionPreset -CaptionStyle $script:Job.Settings -HardwareOutputFrames:([string]$script:Job.Encoder -eq 'h264_vulkan') -CrossfadeSeconds (Get-JobCrossfadeSeconds) -OverscanScale (Get-JobOverscanScale) -Width 1920 -Height 1080
+        }
+        $filterPath = Join-Path $SegmentDirectory ('filter-{0:D4}.txt' -f $segmentIndex)
+        [IO.File]::WriteAllText($filterPath, $definition.FilterText, [Text.UTF8Encoding]::new($false))
+        $ffProgress = Join-Path $SegmentDirectory ('progress-{0:D4}.txt' -f $segmentIndex)
+        $ffError = Join-Path $SegmentDirectory ('error-{0:D4}.log' -f $segmentIndex)
+        $arguments = [Collections.Generic.List[string]]::new()
+        foreach ($value in @('-y','-hide_banner','-loglevel',$ffmpegLogLevel,'-nostats','-progress',$ffProgress,'-filter_complex_threads',[string]$ThreadsPerLane)) { $arguments.Add($value) }
+        if ($Backend -eq 'opencl') {
+            foreach ($value in @('-init_hw_device',"opencl=screencl:$openClDevice",'-filter_hw_device','screencl')) { $arguments.Add($value) }
+        }
+        elseif ($Backend -eq 'vulkan') {
+            foreach ($value in @('-init_hw_device',"vulkan=slideshowgpu:$filterVulkanDeviceIndex",'-filter_hw_device','slideshowgpu')) { $arguments.Add($value) }
+        }
+        elseif ([string]$script:Job.Encoder -eq 'h264_vulkan') {
+            # Processor graph, Vulkan encoder: the graph's last step uploads to this device.
+            foreach ($value in @('-init_hw_device',"vulkan=slideshowgpu:$([int]$script:Job.VulkanDeviceIndex)",'-filter_hw_device','slideshowgpu')) { $arguments.Add($value) }
+        }
+        foreach ($value in @('-f','lavfi','-i','anullsrc=r=48000:cl=stereo','-stream_loop','-1')) { $arguments.Add($value) }
+        # NVDEC decodes the 1080p watermark on the GPU path; FFmpeg falls back
+        # to software decoding for a codec it lacks (ProRes, PNG).
+        if ($Backend -eq 'opencl') { $arguments.Add('-hwaccel'); $arguments.Add('cuda') }
+        if ($watermarkDuration -gt 0) {
+            $offset = ($startFrame / [double]$fps) % $watermarkDuration
+            $arguments.Add('-ss'); $arguments.Add($offset.ToString('0.######', [Globalization.CultureInfo]::InvariantCulture))
+        }
+        $arguments.Add('-i'); $arguments.Add([string]$script:Job.WatermarkPath)
+        foreach ($imagePath in $definition.ImageInputs) { $arguments.Add('-i'); $arguments.Add([string]$imagePath) }
+        foreach ($value in @('-filter_complex_script',$filterPath,'-map','[vout]')) { $arguments.Add($value) }
+        foreach ($value in (Get-EncodingArguments -Encoder ([string]$script:Job.Encoder) -Quality ([string]$script:Job.Settings.Quality) -Fps $fps)) { $arguments.Add($value) }
+        # -r is what makes the segment record its true length. Without it the
+        # MP4 duration is written as the last frame's timestamp rather than that
+        # timestamp plus one frame, so the segment reads one frame short. The
+        # concat demuxer then starts the next segment a frame early and the two
+        # frames either side of every join land on the same presentation time.
+        foreach ($value in @('-threads',[string]$ThreadsPerLane,'-r',[string]$fps,'-frames:v',[string]$frameCount,'-an',$segmentPath)) { $arguments.Add($value) }
+        $jobs.Add([pscustomobject]@{
+            Arguments = $arguments.ToArray()
+            ProgressFile = $ffProgress
+            ErrorFile = $ffError
+            SegmentPath = $segmentPath
+            SegmentIndex = $segmentIndex
+            FrameCount = $frameCount
+            ExpectedSeconds = $durationSeconds
+        })
+    }
+    return [pscustomobject]@{ Jobs = $jobs.ToArray(); CompletedFrames = $completed }
+}
+
+function Write-WorkerDiagnostic {
+    # Into the app's own diagnostic log, when the job names it.
+    param([string]$Message)
+    try {
+        if (-not $script:Job.PSObject.Properties['DiagnosticLogPath']) { return }
+        $path = [string]$script:Job.DiagnosticLogPath
+        if ([string]::IsNullOrWhiteSpace($path)) { return }
+        [IO.File]::AppendAllText($path, "[$([DateTime]::Now.ToString('yyyy-MM-dd HH:mm:ss'))] Render worker: $Message`r`n", [Text.UTF8Encoding]::new($false))
+    }
+    catch {}
+}
+
 try {
     # Job files are written as UTF-8 without a BOM. Windows PowerShell 5 reads
     # BOM-less Get-Content input using the system ANSI code page, corrupting
@@ -433,8 +549,6 @@ try {
     if ([bool]$script:Job.ReusePreview -and (Test-Path -LiteralPath ([string]$script:Job.PreviewPath) -PathType Leaf)) {
         $previewSeconds = Get-MediaDuration ([string]$script:Job.PreviewPath)
     }
-    $completedFrames = 0
-    $segmentJobs = [Collections.Generic.List[object]]::new()
     $openClDevice = if ($script:Job.PSObject.Properties['OpenClDevice']) { [string]$script:Job.OpenClDevice } else { '' }
     $filterBackend = if ($script:Job.PSObject.Properties['FilterBackend']) { [string]$script:Job.FilterBackend } else { 'cpu' }
     $filterVulkanDeviceIndex = if ($script:Job.PSObject.Properties['FilterVulkanDeviceIndex']) { [int]$script:Job.FilterVulkanDeviceIndex } else { [int]$script:Job.VulkanDeviceIndex }
@@ -442,9 +556,24 @@ try {
     $ffmpegLogLevel = if ($script:Job.PSObject.Properties['LogLevel']) { [string]$script:Job.LogLevel } else { 'error' }
     $captionPreset = if ($script:Job.Settings.PSObject.Properties['CaptionPreset']) { [string]$script:Job.Settings.CaptionPreset } else { '1. Clean YouTube' }
     $captionWordsPerLine = if ($script:Job.Settings.PSObject.Properties['CaptionWordsPerLine']) { [int]$script:Job.Settings.CaptionWordsPerLine } else { 8 }
-    $useOpenClEffects = ([string]$script:Job.Encoder -eq 'h264_nvenc') -and -not [string]::IsNullOrWhiteSpace($openClDevice) -and (Test-Path -LiteralPath $screenKernelPath -PathType Leaf)
-    $maximumParallel = if ($script:Job.PSObject.Properties['ParallelSegments']) { [int]$script:Job.ParallelSegments } else { 2 }
-    if ($maximumParallel -lt 1) { $maximumParallel = 1 }
+    $useOpenClMotion = $filterBackend -eq 'opencl' -and ([string]$script:Job.Encoder -eq 'h264_nvenc') -and -not [string]::IsNullOrWhiteSpace($openClDevice) -and (Test-Path -LiteralPath $screenKernelPath -PathType Leaf)
+    $backend = if ($useOpenClMotion) { 'opencl' } elseif ($filterBackend -eq 'vulkan') { 'vulkan' } else { 'cpu' }
+    # A video whose GPU render failed is finished on the processor, in a folder
+    # of its own. Mixing the two renderers' segments in one video is never
+    # wanted, and the marker keeps Resume on the processor for this video.
+    $segmentDirectory = $resumeDirectory
+    $processorDirectory = Join-Path $resumeDirectory 'processor'
+    $gpuFailureMarker = Join-Path $resumeDirectory 'gpu-failed.txt'
+    if ($backend -eq 'opencl' -and (Test-Path -LiteralPath $gpuFailureMarker -PathType Leaf)) {
+        $backend = 'cpu'
+        $segmentDirectory = $processorDirectory
+    }
+    $processorLanes = if ($script:Job.PSObject.Properties['ParallelSegments']) { [int]$script:Job.ParallelSegments } else { 2 }
+    if ($processorLanes -lt 1) { $processorLanes = 1 }
+    # The GPU path stops gaining at about four lanes: on an RTX A4000 laptop 4,
+    # 6 and 8 lanes all measured 8.2-8.5x realtime, while the processor time
+    # they burned rose from 93 to 316 CPU-seconds per two minutes of video.
+    $maximumParallel = if ($backend -eq 'opencl') { [Math]::Min(4, $processorLanes) } else { $processorLanes }
     # Divide the machine between the lanes explicitly. Left to itself every
     # FFmpeg process starts as many filter threads as there are cores, so four
     # lanes on an eight-core laptop ask for thirty-two threads and spend a
@@ -452,95 +581,30 @@ try {
     $logicalCores = [Environment]::ProcessorCount
     if ($logicalCores -lt 1) { $logicalCores = 1 }
     $threadsPerLane = [Math]::Max(1, [int][Math]::Floor($logicalCores / [double]$maximumParallel))
-    for ($segmentIndex = 0; $segmentIndex -lt $segmentCount; $segmentIndex++) {
-        $startFrame = $segmentIndex * $segmentFrames
-        $frameCount = [Math]::Min($segmentFrames, $totalFrames - $startFrame)
-        $durationSeconds = $frameCount / [double]$fps
-        $segmentPath = Join-Path $resumeDirectory ('segment-{0:D4}.mp4' -f $segmentIndex)
-        if (Test-Segment -Path $segmentPath -ExpectedSeconds $durationSeconds) {
-            $completedFrames += $frameCount
-            Write-WorkerProgress (($completedFrames / [double]$totalFrames) * 94.0) "Reused completed segment $($segmentIndex + 1) of $segmentCount."
-            continue
-        }
-
-        # The preview can only be dropped in whole. Cutting it to a shorter
-        # segment would need a keyframe at the cut, and a stream copy that
-        # silently starts at the previous keyframe would pass the duration
-        # check while holding the wrong frames, so only reuse an exact match.
-        if ($segmentIndex -eq 0 -and [bool]$script:Job.ReusePreview -and $previewSeconds -gt 0 -and
-            [Math]::Abs($previewSeconds - $durationSeconds) -lt 0.35 -and
-            (Test-Path -LiteralPath ([string]$script:Job.PreviewPath) -PathType Leaf)) {
-            $copyError = Join-Path $resumeDirectory 'preview-reuse-error.log'
-            $copyArgs = @('-y','-hide_banner','-loglevel','error','-i',[string]$script:Job.PreviewPath,'-map','0:v:0','-an','-c:v','copy',$segmentPath)
-            & ([string]$script:Job.FfmpegPath) @copyArgs 2> $copyError
-            if ($LASTEXITCODE -eq 0 -and (Test-Segment -Path $segmentPath -ExpectedSeconds $durationSeconds)) {
-                $completedFrames += $frameCount
-                Write-WorkerProgress (($completedFrames / [double]$totalFrames) * 94.0) 'Reused the approved preview.'
-                continue
-            }
-            if (Test-Path -LiteralPath $segmentPath -PathType Leaf) { Remove-Item -LiteralPath $segmentPath -Force }
-        }
-
-        $slice = New-TimelineSlice -Timeline $timeline -StartFrame $startFrame -FrameCount $frameCount
-        $segmentSrt = ''
-        if ([string]$script:Job.CaptionMode -in @('Burned only', 'Burned + SRT')) {
-            $segmentSrt = New-SegmentSubtitle -SourcePath ([string]$script:Job.CaptionPath) -StartSeconds ($startFrame / [double]$fps) -DurationSeconds $durationSeconds -DestinationPath (Join-Path $resumeDirectory ('captions-{0:D4}.srt' -f $segmentIndex)) -MaxWordsPerLine $captionWordsPerLine
-        }
-        if ($useOpenClEffects) {
-            $definition = New-FilterGraph -Timeline $slice -RenderFrames $frameCount -ZoomMaximumPercent ([double]$script:Job.Settings.ZoomMaximum) -BlurAmount ([double]$script:Job.Settings.BlurAmount) -BackgroundBrightnessPercent ([double]$script:Job.Settings.BackgroundBrightness) -SubtitlePath $segmentSrt -CaptionPreset $captionPreset -CaptionStyle $script:Job.Settings -OpenClScreenKernelPath $screenKernelPath -CrossfadeSeconds (Get-JobCrossfadeSeconds) -OverscanScale (Get-JobOverscanScale) -Width 1920 -Height 1080
-        }
-        elseif ($filterBackend -eq 'vulkan') {
-            $definition = New-VulkanFilterGraph -Timeline $slice -RenderFrames $frameCount -ZoomMaximumPercent ([double]$script:Job.Settings.ZoomMaximum) -BlurAmount ([double]$script:Job.Settings.BlurAmount) -BackgroundBrightnessPercent ([double]$script:Job.Settings.BackgroundBrightness) -SubtitlePath $segmentSrt -CaptionPreset $captionPreset -CaptionStyle $script:Job.Settings -HardwareOutputFrames ([string]$script:Job.Encoder -eq 'h264_vulkan') -CrossfadeSeconds (Get-JobCrossfadeSeconds) -OverscanScale (Get-JobOverscanScale) -Width 1920 -Height 1080
-        }
-        else {
-            $definition = New-FilterGraph -Timeline $slice -RenderFrames $frameCount -ZoomMaximumPercent ([double]$script:Job.Settings.ZoomMaximum) -BlurAmount ([double]$script:Job.Settings.BlurAmount) -BackgroundBrightnessPercent ([double]$script:Job.Settings.BackgroundBrightness) -SubtitlePath $segmentSrt -CaptionPreset $captionPreset -CaptionStyle $script:Job.Settings -HardwareOutputFrames:([string]$script:Job.Encoder -eq 'h264_vulkan') -CrossfadeSeconds (Get-JobCrossfadeSeconds) -OverscanScale (Get-JobOverscanScale) -Width 1920 -Height 1080
-        }
-        $filterPath = Join-Path $resumeDirectory ('filter-{0:D4}.txt' -f $segmentIndex)
-        [IO.File]::WriteAllText($filterPath, $definition.FilterText, [Text.UTF8Encoding]::new($false))
-        $ffProgress = Join-Path $resumeDirectory ('progress-{0:D4}.txt' -f $segmentIndex)
-        $ffError = Join-Path $resumeDirectory ('error-{0:D4}.log' -f $segmentIndex)
-        $arguments = [Collections.Generic.List[string]]::new()
-        foreach ($value in @('-y','-hide_banner','-loglevel',$ffmpegLogLevel,'-nostats','-progress',$ffProgress,'-filter_complex_threads',[string]$threadsPerLane)) { $arguments.Add($value) }
-        if ($useOpenClEffects) {
-            foreach ($value in @('-init_hw_device',"opencl=screencl:$openClDevice",'-filter_hw_device','screencl')) { $arguments.Add($value) }
-        }
-        elseif ($filterBackend -eq 'vulkan') {
-            foreach ($value in @('-init_hw_device',"vulkan=slideshowgpu:$filterVulkanDeviceIndex",'-filter_hw_device','slideshowgpu')) { $arguments.Add($value) }
-        }
-        elseif ([string]$script:Job.Encoder -eq 'h264_vulkan') {
-            # Processor graph, Vulkan encoder: the graph's last step uploads to this device.
-            foreach ($value in @('-init_hw_device',"vulkan=slideshowgpu:$([int]$script:Job.VulkanDeviceIndex)",'-filter_hw_device','slideshowgpu')) { $arguments.Add($value) }
-        }
-        foreach ($value in @('-f','lavfi','-i','anullsrc=r=48000:cl=stereo','-stream_loop','-1')) { $arguments.Add($value) }
-        if ($watermarkDuration -gt 0) {
-            $offset = ($startFrame / [double]$fps) % $watermarkDuration
-            $arguments.Add('-ss'); $arguments.Add($offset.ToString('0.######', [Globalization.CultureInfo]::InvariantCulture))
-        }
-        $arguments.Add('-i'); $arguments.Add([string]$script:Job.WatermarkPath)
-        foreach ($imagePath in $definition.ImageInputs) { $arguments.Add('-i'); $arguments.Add([string]$imagePath) }
-        foreach ($value in @('-filter_complex_script',$filterPath,'-map','[vout]')) { $arguments.Add($value) }
-        foreach ($value in (Get-EncodingArguments -Encoder ([string]$script:Job.Encoder) -Quality ([string]$script:Job.Settings.Quality) -Fps $fps)) { $arguments.Add($value) }
-        # -r is what makes the segment record its true length. Without it the
-        # MP4 duration is written as the last frame's timestamp rather than that
-        # timestamp plus one frame, so the segment reads one frame short. The
-        # concat demuxer then starts the next segment a frame early and the two
-        # frames either side of every join land on the same presentation time.
-        foreach ($value in @('-threads',[string]$threadsPerLane,'-r',[string]$fps,'-frames:v',[string]$frameCount,'-an',$segmentPath)) { $arguments.Add($value) }
-        $segmentJobs.Add([pscustomobject]@{
-            Arguments = $arguments.ToArray()
-            ProgressFile = $ffProgress
-            ErrorFile = $ffError
-            SegmentPath = $segmentPath
-            SegmentIndex = $segmentIndex
-            FrameCount = $frameCount
-            ExpectedSeconds = $durationSeconds
-        })
-    }
-
     $loudnessTarget = if ($script:Job.PSObject.Properties['LoudnessTargetLufs']) { [double]$script:Job.LoudnessTargetLufs } else { -14.0 }
     $loudnessAnalysis = Start-LoudnessAnalysis -AudioPath ([string]$script:Job.AudioPath) -ReportPath (Join-Path $resumeDirectory 'loudness.json') -TargetLufs $loudnessTarget
 
-    $completedFrames = Invoke-ParallelSegmentJobs -Jobs $segmentJobs.ToArray() -CompletedFrames $completedFrames -TotalFrames $totalFrames -Fps $fps -MaximumParallel $maximumParallel
+    $plan = New-SegmentJobs -Backend $backend -SegmentDirectory $segmentDirectory -ThreadsPerLane $threadsPerLane
+    try {
+        $completedFrames = Invoke-ParallelSegmentJobs -Jobs $plan.Jobs -CompletedFrames $plan.CompletedFrames -TotalFrames $totalFrames -Fps $fps -MaximumParallel $maximumParallel
+    }
+    catch {
+        if ($backend -ne 'opencl') { throw }
+        $reason = $_.Exception.Message
+        # Pause and Cancel end this worker with taskkill /T, which can reach the
+        # FFmpeg lanes a moment before it reaches this process. Wait out that
+        # moment so a render being stopped is not mistaken for a GPU fault.
+        Start-Sleep -Seconds 2
+        [IO.File]::WriteAllText($gpuFailureMarker, "[$([DateTime]::Now.ToString('s'))] $reason", [Text.UTF8Encoding]::new($false))
+        Write-WorkerDiagnostic "GPU motion effects failed; rendering this video on the processor instead. $reason"
+        Write-WorkerProgress 0 'GPU effects failed; rendering this video on the processor instead...'
+        $backend = 'cpu'
+        $segmentDirectory = $processorDirectory
+        $maximumParallel = $processorLanes
+        $threadsPerLane = [Math]::Max(1, [int][Math]::Floor($logicalCores / [double]$maximumParallel))
+        $plan = New-SegmentJobs -Backend 'cpu' -SegmentDirectory $segmentDirectory -ThreadsPerLane $threadsPerLane
+        $completedFrames = Invoke-ParallelSegmentJobs -Jobs $plan.Jobs -CompletedFrames $plan.CompletedFrames -TotalFrames $totalFrames -Fps $fps -MaximumParallel $maximumParallel
+    }
 
     Write-WorkerProgress 95 'Measuring voiceover loudness...'
     $loudnessFilter = Complete-LoudnessFilter -Analysis $loudnessAnalysis
@@ -548,7 +612,7 @@ try {
     Write-WorkerProgress 95 'Joining segments and adding the voiceover...'
     $concatPath = Join-Path $resumeDirectory 'segments.txt'
     $concatLines = for ($index = 0; $index -lt $segmentCount; $index++) {
-        $path = (Join-Path $resumeDirectory ('segment-{0:D4}.mp4' -f $index)).Replace("'", "'\''")
+        $path = (Join-Path $segmentDirectory ('segment-{0:D4}.mp4' -f $index)).Replace("'", "'\''")
         "file '$($path.Replace('\','/'))'"
     }
     [IO.File]::WriteAllLines($concatPath, $concatLines, [Text.UTF8Encoding]::new($false))
