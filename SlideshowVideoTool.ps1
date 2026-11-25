@@ -131,12 +131,14 @@ $script:DataRoot = Join-Path $env:LOCALAPPDATA 'SlideshowVideoTool'
 # Bumping this invalidates resume directories. Segments rendered by an older
 # pipeline must not be concatenated with segments from a newer one, because the
 # camera motion would visibly change partway through the video.
-# Bumped because motion effects moved back onto the processor. Any segment
-# already on disk may have come from the Vulkan graph, which did not reproduce
-# itself, so resuming onto it could splice a mis-timed stretch into the middle
-# of an otherwise correct video.
-$script:RenderPipelineVersion = 'cpu-motion-effects-v15-reproducible'
+# Bumped when the renderer started being chosen per machine. Each video's
+# resume folder now records which renderer it started on (render-config.json),
+# and folders from before that do not say.
+$script:RenderPipelineVersion = 'motion-v16-measured-per-machine'
 $script:SettingsPath = Join-Path $script:DataRoot 'settings.json'
+# What the render worker measured this machine to do fastest; see Invoke-RenderCalibration.
+$script:RenderProfilePath = Join-Path $script:DataRoot 'render-profile.json'
+$script:RenderProfile = $null
 $script:PreviewPath = Join-Path $script:DataRoot 'preview.mp4'
 $script:LastErrorPath = Join-Path $script:DataRoot 'last-error.log'
 $script:DiagnosticLogPath = Join-Path $script:DataRoot 'tool-diagnostic.log'
@@ -647,6 +649,8 @@ $xaml = @'
                         </Grid>
                     </Button>
                     <Button x:Name="CheckUpdatesButton" Style="{StaticResource ToolButtonStyle}" Content="Check for updates"/>
+                    <Button x:Name="OptimizePcButton" Style="{StaticResource ToolButtonStyle}" Content="Optimize for this PC"
+                            ToolTip="Measure this computer again: the next render first tests the processor and each graphics chip for a minute or two, then uses the fastest."/>
                 </StackPanel>
 
                 <StackPanel Grid.Row="2" Margin="11,8,11,12">
@@ -1316,7 +1320,7 @@ $window.Add_SourceInitialized({
 $controlNames = @(
     'RootGrid', 'NavigationColumn', 'NavigationPanel', 'SettingsColumn', 'SettingsPanel', 'PlayerPanel', 'StatusPanel',
     'EncoderText', 'OpenProjectButton', 'SaveProjectButton', 'RenderHistoryButton',
-    'CheckUpdatesButton', 'AppSubtitleText',
+    'CheckUpdatesButton', 'OptimizePcButton', 'AppSubtitleText',
     # Batch and Single video are two halves of one window.
     'ModeBatchButton', 'ModeBatchLabel', 'BatchCountText', 'ModeSingleButton', 'ModeSingleLabel',
     'BatchView', 'SingleView', 'BatchRailPanel', 'SingleRailPanel', 'BatchInspectorPanel',
@@ -2290,57 +2294,6 @@ function Find-NvidiaVulkanEncoderDevice {
     return $fallbackIndex
 }
 
-function Find-NvidiaOpenClDevice {
-    # NVIDIA is normally OpenCL 1.0 on this dual-GPU laptop. Probe instead of
-    # hard-coding it so the portable application also survives device reorder.
-    # -NvidiaOnly refuses the first-working-device fallback: motion effects on
-    # an integrated GPU would be slower than the processor.
-    param([switch]$NvidiaOnly)
-    $fallbackDevice = $null
-    foreach ($device in @('1.0', '0.0', '2.0', '0.1')) {
-        # verbose, not info: FFmpeg names the OpenCL platform and device
-        # ("0.0: NVIDIA CUDA / NVIDIA RTX A4000 Laptop GPU") only at verbose.
-        # At info nothing matched, so this always returned the first device
-        # that worked: on this laptop 1.0, the Intel iGPU.
-        $arguments = @(
-            '-hide_banner', '-loglevel', 'verbose',
-            '-init_hw_device', "opencl=screencl:$device",
-            '-filter_hw_device', 'screencl',
-            '-f', 'lavfi', '-i', 'color=c=black:s=64x64:r=1',
-            '-vf', 'format=rgba,hwupload,hwdownload,format=rgba',
-            '-frames:v', '1', '-f', 'null', 'NUL'
-        )
-        $process = $null
-        try {
-            $startInfo = [Diagnostics.ProcessStartInfo]::new()
-            $startInfo.FileName = $script:FfmpegPath
-            $startInfo.Arguments = Join-ProcessArguments $arguments
-            $startInfo.UseShellExecute = $false
-            $startInfo.CreateNoWindow = $true
-            $startInfo.RedirectStandardOutput = $true
-            $startInfo.RedirectStandardError = $true
-            $process = [Diagnostics.Process]::new()
-            $process.StartInfo = $startInfo
-            if (-not $process.Start()) { continue }
-            # stderr is drained concurrently: at verbose FFmpeg writes more than
-            # the pipe buffer holds, and reading stdout to the end first left
-            # both processes waiting on each other forever.
-            $errorTask = $process.StandardError.ReadToEndAsync()
-            [void]$process.StandardOutput.ReadToEnd()
-            $process.WaitForExit()
-            $errorText = $errorTask.Result
-            if ($process.ExitCode -eq 0) {
-                if ($errorText -match '(?i)nvidia|quadro') { return $device }
-                if ($null -eq $fallbackDevice) { $fallbackDevice = $device }
-            }
-        }
-        catch {}
-        finally { if ($null -ne $process) { $process.Dispose() } }
-    }
-    if ($NvidiaOnly) { return $null }
-    return $fallbackDevice
-}
-
 function Test-SimultaneousEncoderSessions {
     # Hardware encoders cap how many encodes may be open at once and refuse the
     # extras outright rather than queueing them. GeForce drivers have allowed
@@ -2522,7 +2475,19 @@ function Select-AvailableEncoder {
 
 function Set-FilterBackendDisplay {
     $base = if ([string]::IsNullOrWhiteSpace($script:EncoderBaseText)) { [string]$EncoderText.Text } else { $script:EncoderBaseText }
-    if ($script:FilterBackend -in @('vulkan', 'opencl')) {
+    if ($script:FilterBackend -eq 'auto') {
+        $profileData = $script:RenderProfile
+        if ($null -eq $profileData) {
+            $EncoderText.Text = "$base - speed test runs before the first render"
+        }
+        elseif ([string]$profileData.Backend -eq 'opencl') {
+            $EncoderText.Text = "$base + GPU motion effects ($([string]$profileData.DeviceName))"
+        }
+        else {
+            $EncoderText.Text = "$base + CPU motion effects (fastest here)"
+        }
+    }
+    elseif ($script:FilterBackend -in @('vulkan', 'opencl')) {
         $EncoderText.Text = "$base + GPU motion effects"
     }
     else {
@@ -2543,98 +2508,6 @@ function Get-MotionKernelSourcePath {
     # Where a render writes the generated OpenCL motion program for one graph.
     param([string]$Directory, [string]$Name = 'motion.cl')
     return (Join-Path $Directory $Name)
-}
-
-function Test-OpenClMotion {
-    # Renders two seconds through the real OpenCL motion graph - two clips, a
-    # crossfade, the Screen blend - on the chosen device and checks every frame
-    # arrived. Finding an OpenCL device says nothing about whether its driver
-    # compiles the motion kernel or supports the image formats the graph uses;
-    # this does, once per session, before any real video depends on it.
-    param([Parameter(Mandatory = $true)][string]$Device)
-
-    # Through ProcessStartInfo, like the encoder probes: with
-    # ErrorActionPreference=Stop, FFmpeg's stderr on PowerShell's native
-    # pipeline can throw instead of letting the probe fail quietly.
-    function Invoke-ProbeFfmpeg([string[]]$ProbeArguments) {
-        $startInfo = [Diagnostics.ProcessStartInfo]::new()
-        $startInfo.FileName = $script:FfmpegPath
-        $startInfo.Arguments = Join-ProcessArguments $ProbeArguments
-        $startInfo.UseShellExecute = $false
-        $startInfo.CreateNoWindow = $true
-        $startInfo.RedirectStandardOutput = $true
-        $startInfo.RedirectStandardError = $true
-        $process = [Diagnostics.Process]::Start($startInfo)
-        try {
-            $errorTask = $process.StandardError.ReadToEndAsync()
-            [void]$process.StandardOutput.ReadToEnd()
-            if (-not $process.WaitForExit(60000)) {
-                try { $process.Kill() } catch {}
-                return [pscustomobject]@{ ExitCode = -1; Error = 'Timed out after 60 seconds.' }
-            }
-            return [pscustomobject]@{ ExitCode = $process.ExitCode; Error = $errorTask.Result.Trim() }
-        }
-        finally { $process.Dispose() }
-    }
-
-    $testDirectory = Join-Path $script:DataRoot 'gpu-test'
-    try {
-        New-Item -ItemType Directory -Path $testDirectory -Force | Out-Null
-        $imagePath = Join-Path $testDirectory 'test.png'
-        $watermarkPath = Join-Path $testDirectory 'watermark.mp4'
-        [void](Invoke-ProbeFfmpeg @('-y', '-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc2=s=1280x720', '-frames:v', '1', $imagePath))
-        [void](Invoke-ProbeFfmpeg @('-y', '-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=c=black:s=320x180:r=24', '-t', '1', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', $watermarkPath))
-        if (-not (Test-Path -LiteralPath $imagePath) -or -not (Test-Path -LiteralPath $watermarkPath)) { return $false }
-
-        # SourceFrames longer than the clips keeps the motion from reaching its
-        # end inside the test. A real clip holds its final framing for its
-        # last frame or two (as the processor graph does), and with a still
-        # watermark those identical frames would read as repeats. Here every
-        # one of the 48 frames must differ from the one before it.
-        $timeline = [pscustomobject]@{
-            Fps = 24
-            TotalFrames = 48
-            Items = @(
-                [pscustomobject]@{ ImagePath = $imagePath; Frames = 24; SourceFrames = 72; SourceStartFrame = 0; ZoomDirection = 'In'; PanDirection = 'Left' },
-                [pscustomobject]@{ ImagePath = $imagePath; Frames = 24; SourceFrames = 72; SourceStartFrame = 0; ZoomDirection = 'Out'; PanDirection = 'Down' }
-            )
-        }
-        $kernelPath = Get-MotionKernelSourcePath -Directory $testDirectory
-        $definition = New-OpenClFilterGraph -Timeline $timeline -RenderFrames 48 -MotionKernelPath $kernelPath -WatermarkRect @(32, 200, 96, 64) -WatermarkLoopFrames 24 -CrossfadeSeconds 0.25 -OverscanScale 1.1 -Width 640 -Height 360
-        [IO.File]::WriteAllText($kernelPath, $definition.KernelSource, [Text.UTF8Encoding]::new($false))
-        $filterPath = Join-Path $testDirectory 'filter.txt'
-        [IO.File]::WriteAllText($filterPath, $definition.FilterText, [Text.UTF8Encoding]::new($false))
-        $hashPath = Join-Path $testDirectory 'frames.md5'
-        $arguments = @(
-            '-y', '-hide_banner', '-loglevel', 'error',
-            '-init_hw_device', "opencl=motiontest:$Device", '-filter_hw_device', 'motiontest',
-            '-f', 'lavfi', '-i', 'anullsrc', '-stream_loop', '-1', '-i', $watermarkPath
-        )
-        foreach ($imageInput in $definition.ImageInputs) { $arguments += @('-i', $imageInput) }
-        $arguments += @('-filter_complex_script', $filterPath, '-map', '[vout]', '-frames:v', '48', '-f', 'framemd5', $hashPath)
-        $result = Invoke-ProbeFfmpeg $arguments
-        if ($result.ExitCode -ne 0) {
-            Write-ToolDiagnostic "OpenCL motion self-test failed on device $Device. $($result.Error)"
-            return $false
-        }
-        $hashes = @(Get-Content -LiteralPath $hashPath | Where-Object { $_ -and -not $_.StartsWith('#') } | ForEach-Object { ($_ -split ',')[-1].Trim() })
-        # 48 frames, and motion on every one of them: a repeated frame is the
-        # exact fault that retired the earlier OpenCL compositor.
-        $repeats = 0
-        for ($index = 1; $index -lt $hashes.Count; $index++) { if ($hashes[$index] -eq $hashes[$index - 1]) { $repeats++ } }
-        if ($hashes.Count -ne 48 -or $repeats -gt 0) {
-            Write-ToolDiagnostic "OpenCL motion self-test rejected device $Device. Frames=$($hashes.Count) Repeated=$repeats"
-            return $false
-        }
-        return $true
-    }
-    catch {
-        Write-ToolDiagnostic "OpenCL motion self-test threw on device $Device." $_.Exception
-        return $false
-    }
-    finally {
-        Remove-Item -LiteralPath $testDirectory -Recurse -Force -ErrorAction SilentlyContinue
-    }
 }
 
 function Select-AvailableFilterBackend {
@@ -2682,36 +2555,52 @@ function Select-AvailableFilterBackend {
     # OpenCL is the GPU path that does reproduce itself. Each photograph is
     # uploaded once and every frame of motion, the joins and the Screen blend
     # are generated on the card by FFmpeg's synchronous program_opencl filter
-    # (see New-OpenClFilterGraph). Measured on an RTX A4000 laptop with real
-    # photographs: 8.4x realtime against the processor's 3.5x, 16 renders of
-    # one segment under full load all bit-identical, 720 of 720 frames with no
-    # repeats, and every frame within about 48 dB of the processor's render.
-    # It is used with NVENC only, on an NVIDIA OpenCL device that has passed a
-    # short real render this session; anything else stays on the processor.
+    # (see New-OpenClFilterGraph), and it runs on any maker's card - NVIDIA,
+    # AMD or Intel, integrated or not.
+    #
+    # Which renderer a machine should use is not decided here. Renders are
+    # 'auto': the render worker measures the machine once - the processor and
+    # every OpenCL device, at several lane counts, on the first ten seconds of
+    # a real video - keeps the fastest that also draws the same picture, and
+    # saves it as the render profile (see Invoke-RenderCalibration). This only
+    # reads that profile, for the preview and the status line.
     param(
         [Parameter(Mandatory = $true)][psobject]$Timeline,
         [Parameter(Mandatory = $true)][psobject]$Settings,
         [Parameter(Mandatory = $true)][string]$WatermarkPath
     )
     if ($null -ne $script:FilterBackend) {
+        # The first render of a session may have just measured the machine.
+        if ($script:FilterBackend -eq 'auto' -and $null -eq $script:RenderProfile) { Update-RenderProfileState }
         return $script:FilterBackend
     }
 
     $script:EncoderBaseText = [string]$EncoderText.Text
-    $script:FilterBackend = 'cpu'
     $script:FilterVulkanDeviceIndex = $null
-    if ($script:SelectedEncoder -eq 'h264_nvenc') {
-        $StatusText.Text = 'Checking GPU motion effects...'
-        $window.Dispatcher.Invoke([action]{}, [Windows.Threading.DispatcherPriority]::Background)
-        $device = Find-NvidiaOpenClDevice -NvidiaOnly
-        if ($null -ne $device -and (Test-OpenClMotion -Device $device)) {
-            $script:OpenClDevice = $device
-            $script:FilterBackend = 'opencl'
+    $script:OpenClDevice = $null
+    # The Vulkan encoder takes only its own GPU frames; it keeps the processor graph.
+    $script:FilterBackend = if ($script:SelectedEncoder -eq 'h264_vulkan') { 'cpu' } else { 'auto' }
+    Update-RenderProfileState
+    Write-ToolDiagnostic "Filter backend selected. Backend=$($script:FilterBackend) Profile=$(if ($null -ne $script:RenderProfile) { "$($script:RenderProfile.Backend) $($script:RenderProfile.DeviceName) x$($script:RenderProfile.Lanes)" } else { 'not measured yet' })"
+    return $script:FilterBackend
+}
+
+function Update-RenderProfileState {
+    # Reads this machine's saved render profile, if it still applies, and
+    # shows it in the status line.
+    $script:RenderProfile = $null
+    $script:OpenClDevice = $null
+    if ($script:FilterBackend -eq 'auto' -and -not [string]::IsNullOrWhiteSpace([string]$script:SelectedEncoder)) {
+        try {
+            $signature = Get-RenderMachineSignature -Encoder ([string]$script:SelectedEncoder) -FfmpegPath $script:FfmpegPath -PipelineVersion $script:RenderPipelineVersion
+            $script:RenderProfile = Read-RenderProfile -Path $script:RenderProfilePath -Signature $signature
+        }
+        catch { $script:RenderProfile = $null }
+        if ($null -ne $script:RenderProfile -and [string]$script:RenderProfile.Backend -eq 'opencl') {
+            $script:OpenClDevice = [string]$script:RenderProfile.Device
         }
     }
     Set-FilterBackendDisplay
-    Write-ToolDiagnostic "Filter backend selected. Backend=$($script:FilterBackend) OpenClDevice=$($script:OpenClDevice)"
-    return $script:FilterBackend
 }
 
 function Invalidate-Preview {
@@ -4112,6 +4001,7 @@ function Start-ResumableFinalRender {
         OpenClDevice = if ($null -eq $script:OpenClDevice) { '' } else { [string]$script:OpenClDevice }
         ScreenKernelPath = $script:ScreenKernelPath
         DiagnosticLogPath = $script:DiagnosticLogPath
+        RenderProfilePath = $script:RenderProfilePath
         ParallelSegments = Get-RecommendedParallelSegments -Encoder $Encoder
         SegmentSeconds = 30
         # YouTube plays back at about -14 LUFS and never raises a quiet upload.
@@ -4217,6 +4107,8 @@ function Start-HistoryFinalResume {
     }
     if ($job.PSObject.Properties['DiagnosticLogPath']) { $job.DiagnosticLogPath = $script:DiagnosticLogPath }
     else { $job | Add-Member -NotePropertyName DiagnosticLogPath -NotePropertyValue $script:DiagnosticLogPath }
+    if ($job.PSObject.Properties['RenderProfilePath']) { $job.RenderProfilePath = $script:RenderProfilePath }
+    else { $job | Add-Member -NotePropertyName RenderProfilePath -NotePropertyValue $script:RenderProfilePath }
     # Concurrency is safe to re-evaluate on resume; it does not change how the
     # completed segments were cut, only how many render at once from here.
     $lanes = Get-RecommendedParallelSegments -Encoder $encoder
@@ -6364,6 +6256,7 @@ function Start-BatchRender {
                 OpenClDevice = if ($null -eq $script:OpenClDevice) { '' } else { [string]$script:OpenClDevice }
                 ScreenKernelPath = $script:ScreenKernelPath
                 DiagnosticLogPath = $script:DiagnosticLogPath
+                RenderProfilePath = $script:RenderProfilePath
                 ParallelSegments = Get-RecommendedParallelSegments -Encoder $encoder
                 SegmentSeconds = 30
                 LoudnessTargetLufs = -14.0
@@ -6556,7 +6449,7 @@ function Complete-BatchRender {
     }
     catch {
         Write-ToolDiagnostic 'Batch rendering failed.' $_.Exception
-        if ($null -ne $state -and $state.PSObject.Properties['FilterBackend'] -and [string]$state.FilterBackend -in @('vulkan', 'opencl') -and
+        if ($null -ne $state -and $state.PSObject.Properties['FilterBackend'] -and [string]$state.FilterBackend -in @('vulkan', 'opencl', 'auto') -and
             $_.Exception.Message -match '(?i)vulkan|libplacebo|opencl|hwupload|hwdownload|hardware device|device lost|device creation') {
             Set-CpuFilterFallback
             Write-ToolDiagnostic 'GPU motion effects failed during a batch and were disabled for subsequent renders.'
@@ -6681,7 +6574,9 @@ function Start-VideoRender {
         $runId = [guid]::NewGuid().ToString('N')
         $runDirectory = Join-Path $script:DataRoot "run-$runId"
         New-Item -ItemType Directory -Path $runDirectory -Force | Out-Null
-        $useOpenClMotion = $filterBackend -eq 'opencl' -and $encoder -eq 'h264_nvenc' -and $null -ne $script:OpenClDevice
+        # The preview follows this machine's render profile; until the first
+        # render has measured the machine it uses the processor graph.
+        $useOpenClMotion = $filterBackend -eq 'auto' -and -not [string]::IsNullOrWhiteSpace([string]$script:OpenClDevice)
         if ($useOpenClMotion) {
             $motionKernelPath = Get-MotionKernelSourcePath -Directory $runDirectory
             # The same watermark measurement the render worker makes, so the
@@ -6784,7 +6679,7 @@ function Start-VideoRender {
         # The watermark is a 1080p video decoded on every frame; on the GPU
         # path NVDEC decodes it, which is most of what the processor still did.
         # FFmpeg falls back to software decoding for a codec NVDEC lacks.
-        if ($useOpenClMotion) { $arguments.Add('-hwaccel'); $arguments.Add('cuda') }
+        if ($useOpenClMotion -and $encoder -eq 'h264_nvenc') { $arguments.Add('-hwaccel'); $arguments.Add('cuda') }
         foreach ($value in @('-i', $watermarkPath)) {
             $arguments.Add($value)
         }
@@ -6958,7 +6853,7 @@ function Complete-VideoRender {
                     "FFmpeg exited with code $exitCode."
                 }
             }
-            if ($state.PSObject.Properties['FilterBackend'] -and [string]$state.FilterBackend -in @('vulkan', 'opencl') -and
+            if ($state.PSObject.Properties['FilterBackend'] -and [string]$state.FilterBackend -in @('vulkan', 'opencl', 'auto') -and
                 $errorText -match '(?i)vulkan|libplacebo|opencl|hwupload|hwdownload|hardware device|device lost|device creation') {
                 Set-CpuFilterFallback
                 $errorText += "`r`n`r`nGPU motion effects were disabled for this machine. Retry the render; it will use the unchanged CPU quality path."
@@ -7861,6 +7756,22 @@ function Start-UpdateCheck {
 }
 
 $CheckUpdatesButton.Add_Click({ Start-UpdateCheck -Announce $true })
+$OptimizePcButton.Add_Click({
+    # Forgets this machine's measurement; the next render measures it again.
+    # Done for the person after changing hardware settings Windows does not
+    # report, such as a power plan, or simply to check the choice.
+    if (Test-JobActive) {
+        Show-ErrorMessage 'Wait for the current render to finish, then try again.' 'Optimize for this PC'
+        return
+    }
+    $answer = [Windows.MessageBox]::Show($window, "The next render will first spend a minute or two testing this computer's processor and graphics on the first ten seconds of the video, then use whichever is fastest and still draws the same picture.`r`n`r`nThe result is kept, and measured again by itself after a driver or hardware change.", 'Optimize for this PC', [Windows.MessageBoxButton]::OKCancel, [Windows.MessageBoxImage]::Information)
+    if ($answer -ne [Windows.MessageBoxResult]::OK) { return }
+    Remove-Item -LiteralPath $script:RenderProfilePath -Force -ErrorAction SilentlyContinue
+    if ($script:FilterBackend -in @('auto', 'cpu') -and $script:SelectedEncoder -ne 'h264_vulkan') { $script:FilterBackend = 'auto' }
+    Update-RenderProfileState
+    Write-ToolDiagnostic 'Render profile cleared; the next render measures this machine again.'
+    $StatusText.Text = 'This PC will be measured again before the next render.'
+})
 
 $script:FfmpegMissingAtLaunch = -not (Find-FFmpegTools)
 $window.Add_ContentRendered({

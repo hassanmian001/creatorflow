@@ -156,6 +156,173 @@ function Get-WatermarkFootprint {
     }
 }
 
+function Invoke-QuietFfmpeg {
+    # Runs FFmpeg with both pipes drained concurrently (at verbose FFmpeg can
+    # write more than a pipe holds, and reading one to the end first deadlocks)
+    # and without PowerShell's native pipeline, which under
+    # ErrorActionPreference=Stop can turn FFmpeg's stderr into an exception.
+    param(
+        [Parameter(Mandatory = $true)][string]$FfmpegPath,
+        [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [int]$TimeoutSeconds = 120
+    )
+    $startInfo = [Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $FfmpegPath
+    $startInfo.Arguments = (($Arguments | ForEach-Object { if ($_ -eq '' -or $_ -match '[\s"]') { '"' + $_.Replace('"', '\"') + '"' } else { $_ } }) -join ' ')
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $process = [Diagnostics.Process]::Start($startInfo)
+    try {
+        $errorTask = $process.StandardError.ReadToEndAsync()
+        $outputTask = $process.StandardOutput.ReadToEndAsync()
+        if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+            try { $process.Kill() } catch {}
+            return [pscustomobject]@{ ExitCode = -1; Output = ''; Error = "Timed out after $TimeoutSeconds seconds." }
+        }
+        $process.WaitForExit()
+        return [pscustomobject]@{ ExitCode = $process.ExitCode; Output = $outputTask.Result; Error = $errorTask.Result }
+    }
+    finally { $process.Dispose() }
+}
+
+function Get-OpenClDevices {
+    # Every OpenCL device FFmpeg can open, with its name and maker. FFmpeg
+    # names a device ("0.0: NVIDIA CUDA / NVIDIA RTX A4000 Laptop GPU") only
+    # at -loglevel verbose. Integrated GPUs are included: on a laptop with no
+    # other card the Intel or Radeon iGPU can still beat the processor.
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][string]$FfmpegPath)
+
+    $devices = [System.Collections.Generic.List[object]]::new()
+    foreach ($platform in 0..3) {
+        foreach ($index in 0..1) {
+            $device = "$platform.$index"
+            $result = Invoke-QuietFfmpeg -FfmpegPath $FfmpegPath -TimeoutSeconds 30 -Arguments @(
+                '-hide_banner', '-loglevel', 'verbose',
+                '-init_hw_device', "opencl=probe:$device", '-filter_hw_device', 'probe',
+                '-f', 'lavfi', '-i', 'color=c=black:s=64x64:r=1',
+                '-vf', 'format=rgba,hwupload,hwdownload,format=rgba',
+                '-frames:v', '1', '-f', 'null', '-')
+            if ($result.ExitCode -ne 0) {
+                # No device here; a platform with no device 0 has none at all.
+                if ($index -eq 0) { break } else { continue }
+            }
+            $match = [regex]::Match($result.Error, [regex]::Escape($device) + ':\s*(?<platform>[^/\r\n]+?)\s*/\s*(?<name>[^\r\n]+)')
+            $name = if ($match.Success) { $match.Groups['name'].Value.Trim() } else { "OpenCL device $device" }
+            $platformName = if ($match.Success) { $match.Groups['platform'].Value.Trim() } else { '' }
+            $both = "$platformName $name"
+            $vendor = if ($both -match '(?i)nvidia|quadro|geforce|rtx') { 'nvidia' }
+                      elseif ($both -match '(?i)amd|radeon|advanced micro') { 'amd' }
+                      elseif ($both -match '(?i)intel') { 'intel' }
+                      else { 'other' }
+            # Microsoft's OpenCL-on-D3D12 compatibility layer and CPU OpenCL
+            # runtimes are slower than the processor graph; never candidates.
+            if ($both -match '(?i)microsoft|d3d12|clon12|llvmpipe|pocl|cpu') { continue }
+            $devices.Add([pscustomobject]@{ Device = $device; Name = $name; Platform = $platformName; Vendor = $vendor })
+        }
+    }
+    return $devices.ToArray()
+}
+
+function Get-RenderMachineSignature {
+    # What a saved render profile was measured on: the processor, every
+    # graphics adapter with its driver version, the memory, the encoder, the
+    # FFmpeg build and the render pipeline. A change to any of them - a
+    # driver update, another card, a new pipeline - and the profile no longer
+    # applies, so the machine is measured again.
+    [CmdletBinding()]
+    param(
+        [string]$Encoder = '',
+        [string]$FfmpegPath = '',
+        [string]$PipelineVersion = ''
+    )
+    $parts = [System.Collections.Generic.List[string]]::new()
+    $parts.Add('render-profile-v1'); $parts.Add($Encoder); $parts.Add($FfmpegPath); $parts.Add($PipelineVersion)
+    try { foreach ($cpu in @(Get-CimInstance -ClassName Win32_Processor -ErrorAction Stop)) { $parts.Add("$($cpu.Name)|$($cpu.NumberOfLogicalProcessors)") } } catch {}
+    try { foreach ($gpu in @(Get-CimInstance -ClassName Win32_VideoController -ErrorAction Stop | Sort-Object Name)) { $parts.Add("$($gpu.Name)|$($gpu.DriverVersion)") } } catch {}
+    try { $parts.Add([string][Math]::Round((Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop).TotalPhysicalMemory / 1GB)) } catch {}
+    $bytes = [Text.Encoding]::UTF8.GetBytes(($parts -join "`n"))
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { return ([BitConverter]::ToString($sha.ComputeHash($bytes)) -replace '-', '').ToLowerInvariant() }
+    finally { $sha.Dispose() }
+}
+
+function Read-RenderProfile {
+    # The saved measurement for this machine, or $null when there is none or
+    # it was made on different hardware, drivers, encoder or pipeline.
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Signature
+    )
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
+    try {
+        $profileData = [IO.File]::ReadAllText($Path, [Text.Encoding]::UTF8) | ConvertFrom-Json
+        if ([string]$profileData.Signature -ne $Signature) { return $null }
+        return $profileData
+    }
+    catch { return $null }
+}
+
+function Test-OpenClMotionDevice {
+    # Renders two seconds through the real OpenCL graph - two clips, a
+    # crossfade, the watermark loop and the deliver kernel - on one device and
+    # checks every frame arrived and moved. Finding a device says nothing
+    # about whether its driver compiles the kernels or supports the image
+    # formats the graph uses; this does, before any real video depends on it.
+    # Returns '' when the device passes, otherwise why it failed.
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$FfmpegPath,
+        [Parameter(Mandatory = $true)][string]$Device,
+        [Parameter(Mandatory = $true)][string]$WorkDirectory
+    )
+
+    New-Item -ItemType Directory -Path $WorkDirectory -Force | Out-Null
+    $imagePath = Join-Path $WorkDirectory 'test.png'
+    $watermarkPath = Join-Path $WorkDirectory 'watermark.mp4'
+    [void](Invoke-QuietFfmpeg -FfmpegPath $FfmpegPath -Arguments @('-y', '-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc2=s=1280x720', '-frames:v', '1', $imagePath))
+    [void](Invoke-QuietFfmpeg -FfmpegPath $FfmpegPath -Arguments @('-y', '-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=c=black:s=320x180:r=24', '-t', '1', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', $watermarkPath))
+    if (-not (Test-Path -LiteralPath $imagePath) -or -not (Test-Path -LiteralPath $watermarkPath)) { return 'Could not create the test media.' }
+
+    # SourceFrames longer than the clips keeps the motion from reaching its
+    # end inside the test. A real clip holds its final framing for its last
+    # frame or two, as the processor graph does, and with a still watermark
+    # those identical frames would read as repeats. Here every one of the 48
+    # frames must differ from the one before it; a repeated frame is the
+    # exact fault that retired an earlier OpenCL compositor.
+    $timeline = [pscustomobject]@{
+        Fps = 24
+        TotalFrames = 48
+        Items = @(
+            [pscustomobject]@{ ImagePath = $imagePath; Frames = 24; SourceFrames = 72; SourceStartFrame = 0; ZoomDirection = 'In'; PanDirection = 'Left' },
+            [pscustomobject]@{ ImagePath = $imagePath; Frames = 24; SourceFrames = 72; SourceStartFrame = 0; ZoomDirection = 'Out'; PanDirection = 'Down' }
+        )
+    }
+    $kernelPath = Join-Path $WorkDirectory 'motion.cl'
+    $definition = New-OpenClFilterGraph -Timeline $timeline -RenderFrames 48 -MotionKernelPath $kernelPath -WatermarkRect @(32, 200, 96, 64) -WatermarkLoopFrames 24 -CrossfadeSeconds 0.25 -OverscanScale 1.1 -Width 640 -Height 360
+    [IO.File]::WriteAllText($kernelPath, $definition.KernelSource, [Text.UTF8Encoding]::new($false))
+    $filterPath = Join-Path $WorkDirectory 'filter.txt'
+    [IO.File]::WriteAllText($filterPath, $definition.FilterText, [Text.UTF8Encoding]::new($false))
+    $arguments = @(
+        '-y', '-hide_banner', '-loglevel', 'error',
+        '-init_hw_device', "opencl=motiontest:$Device", '-filter_hw_device', 'motiontest',
+        '-f', 'lavfi', '-i', 'anullsrc', '-stream_loop', '-1', '-i', $watermarkPath
+    )
+    foreach ($imageInput in $definition.ImageInputs) { $arguments += @('-i', $imageInput) }
+    $arguments += @('-filter_complex_script', $filterPath, '-map', '[vout]', '-frames:v', '48', '-f', 'framemd5', '-')
+    $result = Invoke-QuietFfmpeg -FfmpegPath $FfmpegPath -Arguments $arguments -TimeoutSeconds 90
+    if ($result.ExitCode -ne 0) { return "The test render failed: $(($result.Error -split "`n" | Select-Object -Last 3) -join ' ')" }
+    $hashes = @($result.Output -split "`n" | Where-Object { $_ -match '^\s*\d+,' } | ForEach-Object { ($_ -split ',')[-1].Trim() })
+    $repeats = 0
+    for ($index = 1; $index -lt $hashes.Count; $index++) { if ($hashes[$index] -eq $hashes[$index - 1]) { $repeats++ } }
+    if ($hashes.Count -ne 48) { return "The test render produced $($hashes.Count) frames instead of 48." }
+    if ($repeats -gt 0) { return "The test render repeated $repeats frames." }
+    return ''
+}
+
 function New-ShuffledIndexCycle {
     param(
         [int]$Count,
@@ -1752,6 +1919,11 @@ Export-ModuleMember -Function @(
     'New-OpenClFilterGraph',
     'Get-OpenClMotionKernelSource',
     'Get-WatermarkFootprint',
+    'Get-OpenClDevices',
+    'Test-OpenClMotionDevice',
+    'Invoke-QuietFfmpeg',
+    'Get-RenderMachineSignature',
+    'Read-RenderProfile',
     'Format-CaptionText',
     'Copy-SrtWithWordWrapping',
     'Get-EncodingArguments',

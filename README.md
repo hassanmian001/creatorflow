@@ -71,7 +71,7 @@ A portable Windows 11 tool for turning a folder of images and a voiceover into a
 - Batch-renders saved project files sequentially too.
 - Keeps persistent render history with completed, failed, paused, and resumable final and batch jobs.
 - Uses NVIDIA NVENC for H.264 encoding where the graphics card provides it.
-- On NVIDIA, renders motion effects, crossfades, the watermark's RGB Screen blend and burned captions on the graphics card through OpenCL. A 20-minute video takes about 1.8 minutes instead of 6.7. Elsewhere the processor produces the same frames.
+- Renders motion effects, crossfades, the watermark's RGB Screen blend and burned captions on whichever graphics chip each computer was measured to run fastest: NVIDIA, AMD or Intel, integrated or not. On the RTX A4000 laptop a 20-minute video takes about 1.7 minutes instead of 6.7. Where no GPU helps, the processor produces the same frames.
 - Skips caption rendering entirely when **SRT only** is selected.
 - Supports **Burned only** output when captions should be embedded without creating a separate SRT file.
 - Includes ten reference-matched caption presets covering bold outlined YouTube,
@@ -369,9 +369,9 @@ The tool measures the machine it finds itself on rather than assuming:
 | It checks | What it does with the answer |
 |---|---|
 | Video encoder | Probes NVIDIA NVENC, then AMD AMF, then NVIDIA Vulkan, then Intel Quick Sync, and finally falls back to CPU encoding. Each probe encodes a real 1920x1080 frame, because hardware encoders reject frames below a minimum size and would otherwise report themselves as missing. The chosen one is named in the top-right of the window. |
-| Motion-effects processor | The graphics card through OpenCL on an NVIDIA card with NVENC that passes a short test render; otherwise the processor. See **GPU acceleration** below. |
+| Motion-effects processor | Measured on each machine: the processor or any OpenCL graphics chip (NVIDIA, AMD, Intel, integrated or not), whichever is fastest and draws the same picture. See **Measured per machine** below. |
 | Processor cores and installed memory | Picks how many 30-second segments render at once — 1 lane on a small laptop, up to 6 on a workstation. |
-| OpenCL device | The NVIDIA OpenCL device, found by name, runs motion effects, the watermark blend and captions. With none, all of that runs on the processor, and the frames differ from the GPU's by about 48 dB, which no one can see. |
+| OpenCL device and lane count | Chosen by that measurement and saved per machine. Without a usable device everything runs on the processor, and its frames differ from the GPU's by about 48 dB, which no one can see. |
 
 So it runs anywhere; what changes is how long a render takes. A machine with no
 supported GPU encoder still produces the same video through `libx264`, just slower.
@@ -472,12 +472,50 @@ is why the YUV conversion happens in the kernel.
 
 The OpenCL kernel copies the processor graph's motion exactly, including its
 cubic (a = -0.60) and its frame numbering, so a video that falls back to the
-processor halfway through a batch looks the same as the rest. Before the first
-render of a session the tool runs a two-second test render on the card; any
-machine where that fails, or that has no NVIDIA OpenCL device, uses the
-processor. If a GPU render fails partway, the render worker starts that video
-again on the processor by itself, in a separate folder, so the two renderers'
-segments are never joined into one video.
+processor halfway through a batch looks the same as the rest. If a GPU render
+fails partway, the render worker starts that video again on the processor by
+itself, in a separate folder, so the two renderers' segments are never joined
+into one video. The machine's profile then switches to the processor too.
+
+### Measured per machine
+
+The tool runs on different computers: NVIDIA, AMD or Intel graphics,
+integrated or not, and four cores or sixteen. The fastest setup on each cannot
+be read off a spec sheet, so each computer is measured once. Before the first
+render after an update, a driver change or a hardware change, the render worker
+spends about a minute on the first ten seconds of the real video (status:
+"Optimizing for this PC (one time)"):
+
+1. It renders on the processor with its usual lane count. That is the speed to
+   beat and the picture to match.
+2. For every OpenCL device (NVIDIA, AMD, Intel or Ryzen integrated):
+   - a two-second motion test, where every frame must be present and none
+     repeated;
+   - a render compared with the processor's, rejected under 32 dB average or
+     25 dB on any frame;
+   - then 1, 2 and 4 lanes at once. It stops when another lane adds under 8
+     percent, and on NVIDIA it allows one lane per 2 GB of memory.
+3. It keeps the fastest. A GPU must beat the processor by 5 percent.
+
+The result is saved as `render-profile.json` beside the settings, tied to the
+processor, every graphics adapter and its driver version, the encoder, the
+FFmpeg build and the pipeline version. Each video records the setup it started
+on in its resume folder, so Resume never switches renderer mid-video.
+**Optimize for this PC** in the sidebar forgets the profile, and the next render
+measures again.
+
+On the RTX A4000 laptop the calibration recorded:
+
+| | NVENC | Quick Sync |
+|---|---|---|
+| Processor, 8 lanes | 3.41x | 2.76x |
+| Intel UHD (integrated), 1 / 2 / 4 lanes | 2.82 / 3.68 / 4.23x | 2.10 / 2.69 / 2.94x |
+| RTX A4000, 1 / 2 / 4 lanes | 5.76 / 8.94 / **10.71x** | 3.56 / 4.94 / **5.59x** |
+
+On this i7 even the integrated GPU beats the processor graph, and it does so
+at a seventh of the processor time. A machine with a weaker processor gains
+more. The preview follows the saved profile; until the first render has
+measured the machine it uses the processor.
 
 Two FFmpeg pitfalls this design avoids. `program_opencl` produces a frame for
 every distinct timestamp across its inputs, so every input to a multi-input
@@ -487,8 +525,7 @@ by a rounding error, so every frame came out twice. That gave 103 repeated
 frames in 382 and motion at about 17 FPS. Second, `xfade_opencl` skips ahead
 when chained, so crossfades use their own kernel.
 
-Elsewhere (AMD, Intel, no NVENC) motion effects run on the processor. The engine
-also contains a Vulkan/libplacebo graph that performs the animated crop on the
+The engine also contains a Vulkan/libplacebo graph that performs the animated crop on the
 graphics card, and it is not used.
 
 It does not reproduce itself. Rendering one 30-second segment repeatedly from

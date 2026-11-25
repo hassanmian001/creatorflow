@@ -291,6 +291,24 @@ Assert-True ($openClCaptionGraph.KernelSource -match '__read_only image2d_t capt
 Assert-True ($openClCaptionGraph.FilterText -match 'crop=1920:1080:0:0,') 'Without a measured footprint the whole watermark frame is carried'
 Assert-True ($openClCaptionGraph.FilterText -match 'setpts=N\[captionocl\]') 'Caption layer is on the integer frame clock'
 
+$signatureA = Get-RenderMachineSignature -Encoder 'h264_nvenc' -FfmpegPath 'C:\ffmpeg.exe' -PipelineVersion 'p1'
+$signatureB = Get-RenderMachineSignature -Encoder 'h264_amf' -FfmpegPath 'C:\ffmpeg.exe' -PipelineVersion 'p1'
+$signatureC = Get-RenderMachineSignature -Encoder 'h264_nvenc' -FfmpegPath 'C:\ffmpeg.exe' -PipelineVersion 'p2'
+Assert-True ($signatureA -eq (Get-RenderMachineSignature -Encoder 'h264_nvenc' -FfmpegPath 'C:\ffmpeg.exe' -PipelineVersion 'p1')) 'Machine signature is stable'
+Assert-True ($signatureA -ne $signatureB -and $signatureA -ne $signatureC) 'A different encoder or pipeline means measuring again'
+$profileRoot = Join-Path ([IO.Path]::GetTempPath()) ("SlideshowProfileTest-" + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $profileRoot | Out-Null
+try {
+    $profilePath = Join-Path $profileRoot 'render-profile.json'
+    Assert-True ($null -eq (Read-RenderProfile -Path $profilePath -Signature $signatureA)) 'No profile before the first measurement'
+    [IO.File]::WriteAllText($profilePath, (@{ Signature = $signatureA; Backend = 'opencl'; Device = '0.0'; Lanes = 4 } | ConvertTo-Json))
+    Assert-True ((Read-RenderProfile -Path $profilePath -Signature $signatureA).Device -eq '0.0') 'Profile measured on this machine is used'
+    Assert-True ($null -eq (Read-RenderProfile -Path $profilePath -Signature $signatureB)) 'Profile measured on other hardware or settings is ignored'
+    [IO.File]::WriteAllText($profilePath, '{ not json')
+    Assert-True ($null -eq (Read-RenderProfile -Path $profilePath -Signature $signatureA)) 'A damaged profile is ignored'
+}
+finally { Remove-Item -LiteralPath $profileRoot -Recurse -Force -ErrorAction SilentlyContinue }
+
 $estimated = Get-EstimatedOutputSizeMb -DurationSeconds 1200 -Quality Compact
 Assert-True ($estimated -eq 324) 'Twenty-minute compact size estimate'
 

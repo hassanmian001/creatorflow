@@ -460,12 +460,99 @@ function New-SegmentSubtitle {
     return $DestinationPath
 }
 
+function New-SegmentCommand {
+    # The FFmpeg command that renders frames StartFrame to StartFrame +
+    # FrameCount of the timeline into SegmentPath, on one filter backend.
+    # Used for the video's segments and, unchanged, for the speed test that
+    # measures this machine, so the test renders exactly what a video would.
+    param(
+        [ValidateSet('opencl', 'vulkan', 'cpu')][string]$Backend,
+        [string]$Device = '',
+        [string]$SegmentDirectory,
+        [string]$SegmentPath,
+        [string]$Prefix,
+        [int]$SegmentIndex,
+        [int]$StartFrame,
+        [int]$FrameCount,
+        [int]$ThreadsPerLane
+    )
+    $segmentIndex = $SegmentIndex
+    $startFrame = $StartFrame
+    $frameCount = $FrameCount
+    $segmentPath = $SegmentPath
+    $durationSeconds = $frameCount / [double]$fps
+    $slice = New-TimelineSlice -Timeline $timeline -StartFrame $startFrame -FrameCount $frameCount
+    $segmentSrt = ''
+    if ([string]$script:Job.CaptionMode -in @('Burned only', 'Burned + SRT')) {
+        $segmentSrt = New-SegmentSubtitle -SourcePath ([string]$script:Job.CaptionPath) -StartSeconds ($startFrame / [double]$fps) -DurationSeconds $durationSeconds -DestinationPath (Join-Path $SegmentDirectory ("$Prefix-captions.srt")) -MaxWordsPerLine $captionWordsPerLine
+    }
+    if ($Backend -eq 'opencl') {
+        $kernelPath = Join-Path $SegmentDirectory ("$Prefix-motion.cl")
+        $definition = New-OpenClFilterGraph -Timeline $slice -RenderFrames $frameCount -MotionKernelPath $kernelPath -WatermarkRect $watermarkRect -WatermarkLoopFrames $watermarkLoopFrames -ZoomMaximumPercent ([double]$script:Job.Settings.ZoomMaximum) -BlurAmount ([double]$script:Job.Settings.BlurAmount) -BackgroundBrightnessPercent ([double]$script:Job.Settings.BackgroundBrightness) -SubtitlePath $segmentSrt -CaptionPreset $captionPreset -CaptionStyle $script:Job.Settings -CrossfadeSeconds (Get-JobCrossfadeSeconds) -OverscanScale (Get-JobOverscanScale) -Width 1920 -Height 1080
+        [IO.File]::WriteAllText($kernelPath, $definition.KernelSource, [Text.UTF8Encoding]::new($false))
+    }
+    elseif ($Backend -eq 'vulkan') {
+        $definition = New-VulkanFilterGraph -Timeline $slice -RenderFrames $frameCount -ZoomMaximumPercent ([double]$script:Job.Settings.ZoomMaximum) -BlurAmount ([double]$script:Job.Settings.BlurAmount) -BackgroundBrightnessPercent ([double]$script:Job.Settings.BackgroundBrightness) -SubtitlePath $segmentSrt -CaptionPreset $captionPreset -CaptionStyle $script:Job.Settings -HardwareOutputFrames ([string]$script:Job.Encoder -eq 'h264_vulkan') -CrossfadeSeconds (Get-JobCrossfadeSeconds) -OverscanScale (Get-JobOverscanScale) -Width 1920 -Height 1080
+    }
+    else {
+        $definition = New-FilterGraph -Timeline $slice -RenderFrames $frameCount -ZoomMaximumPercent ([double]$script:Job.Settings.ZoomMaximum) -BlurAmount ([double]$script:Job.Settings.BlurAmount) -BackgroundBrightnessPercent ([double]$script:Job.Settings.BackgroundBrightness) -SubtitlePath $segmentSrt -CaptionPreset $captionPreset -CaptionStyle $script:Job.Settings -HardwareOutputFrames:([string]$script:Job.Encoder -eq 'h264_vulkan') -CrossfadeSeconds (Get-JobCrossfadeSeconds) -OverscanScale (Get-JobOverscanScale) -Width 1920 -Height 1080
+    }
+    $filterPath = Join-Path $SegmentDirectory ("$Prefix-filter.txt")
+    [IO.File]::WriteAllText($filterPath, $definition.FilterText, [Text.UTF8Encoding]::new($false))
+    $ffProgress = Join-Path $SegmentDirectory ("$Prefix-progress.txt")
+    $ffError = Join-Path $SegmentDirectory ("$Prefix-error.log")
+    $arguments = [Collections.Generic.List[string]]::new()
+    foreach ($value in @('-y','-hide_banner','-loglevel',$ffmpegLogLevel,'-nostats','-progress',$ffProgress,'-filter_complex_threads',[string]$ThreadsPerLane)) { $arguments.Add($value) }
+    if ($Backend -eq 'opencl') {
+        foreach ($value in @('-init_hw_device',"opencl=screencl:$Device",'-filter_hw_device','screencl')) { $arguments.Add($value) }
+    }
+    elseif ($Backend -eq 'vulkan') {
+        foreach ($value in @('-init_hw_device',"vulkan=slideshowgpu:$filterVulkanDeviceIndex",'-filter_hw_device','slideshowgpu')) { $arguments.Add($value) }
+    }
+    elseif ([string]$script:Job.Encoder -eq 'h264_vulkan') {
+        # Processor graph, Vulkan encoder: the graph's last step uploads to this device.
+        foreach ($value in @('-init_hw_device',"vulkan=slideshowgpu:$([int]$script:Job.VulkanDeviceIndex)",'-filter_hw_device','slideshowgpu')) { $arguments.Add($value) }
+    }
+    foreach ($value in @('-f','lavfi','-i','anullsrc=r=48000:cl=stereo','-stream_loop','-1')) { $arguments.Add($value) }
+    # With NVENC there is an NVIDIA card, so NVDEC decodes the watermark;
+    # FFmpeg falls back to software for a codec it lacks (ProRes, PNG). Other
+    # makers decode it in software: on the GPU path only one cycle of the
+    # watermark is decoded per segment, so that costs little, and d3d11va
+    # picks whichever adapter it likes - on a hybrid laptop the wrong one,
+    # which made NVENC fail.
+    if ($Backend -eq 'opencl' -and [string]$script:Job.Encoder -eq 'h264_nvenc') { $arguments.Add('-hwaccel'); $arguments.Add('cuda') }
+    if ($watermarkDuration -gt 0) {
+        $offset = ($startFrame / [double]$fps) % $watermarkDuration
+        $arguments.Add('-ss'); $arguments.Add($offset.ToString('0.######', [Globalization.CultureInfo]::InvariantCulture))
+    }
+    $arguments.Add('-i'); $arguments.Add([string]$script:Job.WatermarkPath)
+    foreach ($imagePath in $definition.ImageInputs) { $arguments.Add('-i'); $arguments.Add([string]$imagePath) }
+    foreach ($value in @('-filter_complex_script',$filterPath,'-map','[vout]')) { $arguments.Add($value) }
+    foreach ($value in (Get-EncodingArguments -Encoder ([string]$script:Job.Encoder) -Quality ([string]$script:Job.Settings.Quality) -Fps $fps)) { $arguments.Add($value) }
+    # -r is what makes the segment record its true length. Without it the
+    # MP4 duration is written as the last frame's timestamp rather than that
+    # timestamp plus one frame, so the segment reads one frame short. The
+    # concat demuxer then starts the next segment a frame early and the two
+    # frames either side of every join land on the same presentation time.
+    foreach ($value in @('-threads',[string]$ThreadsPerLane,'-r',[string]$fps,'-frames:v',[string]$frameCount,'-an',$segmentPath)) { $arguments.Add($value) }
+    return [pscustomobject]@{
+        Arguments = $arguments.ToArray()
+        ProgressFile = $ffProgress
+        ErrorFile = $ffError
+        SegmentPath = $segmentPath
+        SegmentIndex = $segmentIndex
+        FrameCount = $frameCount
+        ExpectedSeconds = $durationSeconds
+    }
+}
+
 function New-SegmentJobs {
     # The FFmpeg command for every segment of the video not already finished
     # in SegmentDirectory, on one filter backend. Reads the job settings the
     # main block works out before calling it.
     param(
         [ValidateSet('opencl', 'vulkan', 'cpu')][string]$Backend,
+        [string]$Device = '',
         [string]$SegmentDirectory,
         [int]$ThreadsPerLane
     )
@@ -501,67 +588,186 @@ function New-SegmentJobs {
             if (Test-Path -LiteralPath $segmentPath -PathType Leaf) { Remove-Item -LiteralPath $segmentPath -Force }
         }
 
-        $slice = New-TimelineSlice -Timeline $timeline -StartFrame $startFrame -FrameCount $frameCount
-        $segmentSrt = ''
-        if ([string]$script:Job.CaptionMode -in @('Burned only', 'Burned + SRT')) {
-            $segmentSrt = New-SegmentSubtitle -SourcePath ([string]$script:Job.CaptionPath) -StartSeconds ($startFrame / [double]$fps) -DurationSeconds $durationSeconds -DestinationPath (Join-Path $SegmentDirectory ('captions-{0:D4}.srt' -f $segmentIndex)) -MaxWordsPerLine $captionWordsPerLine
-        }
-        if ($Backend -eq 'opencl') {
-            $kernelPath = Join-Path $SegmentDirectory ('motion-{0:D4}.cl' -f $segmentIndex)
-            $definition = New-OpenClFilterGraph -Timeline $slice -RenderFrames $frameCount -MotionKernelPath $kernelPath -WatermarkRect $watermarkRect -WatermarkLoopFrames $watermarkLoopFrames -ZoomMaximumPercent ([double]$script:Job.Settings.ZoomMaximum) -BlurAmount ([double]$script:Job.Settings.BlurAmount) -BackgroundBrightnessPercent ([double]$script:Job.Settings.BackgroundBrightness) -SubtitlePath $segmentSrt -CaptionPreset $captionPreset -CaptionStyle $script:Job.Settings -CrossfadeSeconds (Get-JobCrossfadeSeconds) -OverscanScale (Get-JobOverscanScale) -Width 1920 -Height 1080
-            [IO.File]::WriteAllText($kernelPath, $definition.KernelSource, [Text.UTF8Encoding]::new($false))
-        }
-        elseif ($Backend -eq 'vulkan') {
-            $definition = New-VulkanFilterGraph -Timeline $slice -RenderFrames $frameCount -ZoomMaximumPercent ([double]$script:Job.Settings.ZoomMaximum) -BlurAmount ([double]$script:Job.Settings.BlurAmount) -BackgroundBrightnessPercent ([double]$script:Job.Settings.BackgroundBrightness) -SubtitlePath $segmentSrt -CaptionPreset $captionPreset -CaptionStyle $script:Job.Settings -HardwareOutputFrames ([string]$script:Job.Encoder -eq 'h264_vulkan') -CrossfadeSeconds (Get-JobCrossfadeSeconds) -OverscanScale (Get-JobOverscanScale) -Width 1920 -Height 1080
-        }
-        else {
-            $definition = New-FilterGraph -Timeline $slice -RenderFrames $frameCount -ZoomMaximumPercent ([double]$script:Job.Settings.ZoomMaximum) -BlurAmount ([double]$script:Job.Settings.BlurAmount) -BackgroundBrightnessPercent ([double]$script:Job.Settings.BackgroundBrightness) -SubtitlePath $segmentSrt -CaptionPreset $captionPreset -CaptionStyle $script:Job.Settings -HardwareOutputFrames:([string]$script:Job.Encoder -eq 'h264_vulkan') -CrossfadeSeconds (Get-JobCrossfadeSeconds) -OverscanScale (Get-JobOverscanScale) -Width 1920 -Height 1080
-        }
-        $filterPath = Join-Path $SegmentDirectory ('filter-{0:D4}.txt' -f $segmentIndex)
-        [IO.File]::WriteAllText($filterPath, $definition.FilterText, [Text.UTF8Encoding]::new($false))
-        $ffProgress = Join-Path $SegmentDirectory ('progress-{0:D4}.txt' -f $segmentIndex)
-        $ffError = Join-Path $SegmentDirectory ('error-{0:D4}.log' -f $segmentIndex)
-        $arguments = [Collections.Generic.List[string]]::new()
-        foreach ($value in @('-y','-hide_banner','-loglevel',$ffmpegLogLevel,'-nostats','-progress',$ffProgress,'-filter_complex_threads',[string]$ThreadsPerLane)) { $arguments.Add($value) }
-        if ($Backend -eq 'opencl') {
-            foreach ($value in @('-init_hw_device',"opencl=screencl:$openClDevice",'-filter_hw_device','screencl')) { $arguments.Add($value) }
-        }
-        elseif ($Backend -eq 'vulkan') {
-            foreach ($value in @('-init_hw_device',"vulkan=slideshowgpu:$filterVulkanDeviceIndex",'-filter_hw_device','slideshowgpu')) { $arguments.Add($value) }
-        }
-        elseif ([string]$script:Job.Encoder -eq 'h264_vulkan') {
-            # Processor graph, Vulkan encoder: the graph's last step uploads to this device.
-            foreach ($value in @('-init_hw_device',"vulkan=slideshowgpu:$([int]$script:Job.VulkanDeviceIndex)",'-filter_hw_device','slideshowgpu')) { $arguments.Add($value) }
-        }
-        foreach ($value in @('-f','lavfi','-i','anullsrc=r=48000:cl=stereo','-stream_loop','-1')) { $arguments.Add($value) }
-        # NVDEC decodes the 1080p watermark on the GPU path; FFmpeg falls back
-        # to software decoding for a codec it lacks (ProRes, PNG).
-        if ($Backend -eq 'opencl') { $arguments.Add('-hwaccel'); $arguments.Add('cuda') }
-        if ($watermarkDuration -gt 0) {
-            $offset = ($startFrame / [double]$fps) % $watermarkDuration
-            $arguments.Add('-ss'); $arguments.Add($offset.ToString('0.######', [Globalization.CultureInfo]::InvariantCulture))
-        }
-        $arguments.Add('-i'); $arguments.Add([string]$script:Job.WatermarkPath)
-        foreach ($imagePath in $definition.ImageInputs) { $arguments.Add('-i'); $arguments.Add([string]$imagePath) }
-        foreach ($value in @('-filter_complex_script',$filterPath,'-map','[vout]')) { $arguments.Add($value) }
-        foreach ($value in (Get-EncodingArguments -Encoder ([string]$script:Job.Encoder) -Quality ([string]$script:Job.Settings.Quality) -Fps $fps)) { $arguments.Add($value) }
-        # -r is what makes the segment record its true length. Without it the
-        # MP4 duration is written as the last frame's timestamp rather than that
-        # timestamp plus one frame, so the segment reads one frame short. The
-        # concat demuxer then starts the next segment a frame early and the two
-        # frames either side of every join land on the same presentation time.
-        foreach ($value in @('-threads',[string]$ThreadsPerLane,'-r',[string]$fps,'-frames:v',[string]$frameCount,'-an',$segmentPath)) { $arguments.Add($value) }
-        $jobs.Add([pscustomobject]@{
-            Arguments = $arguments.ToArray()
-            ProgressFile = $ffProgress
-            ErrorFile = $ffError
-            SegmentPath = $segmentPath
-            SegmentIndex = $segmentIndex
-            FrameCount = $frameCount
-            ExpectedSeconds = $durationSeconds
-        })
+        $jobs.Add((New-SegmentCommand -Backend $Backend -Device $Device -SegmentDirectory $SegmentDirectory -SegmentPath $segmentPath -Prefix ('{0:D4}' -f $segmentIndex) -SegmentIndex $segmentIndex -StartFrame $startFrame -FrameCount $frameCount -ThreadsPerLane $ThreadsPerLane))
     }
     return [pscustomobject]@{ Jobs = $jobs.ToArray(); CompletedFrames = $completed }
+}
+
+function Measure-RenderConfiguration {
+    # Renders the calibration slice Lanes times at once on one backend and
+    # reports the throughput: seconds of video per second of wall time across
+    # all lanes, which is what a whole video's segments achieve.
+    param(
+        [string]$Backend,
+        [string]$Device = '',
+        [int]$Lanes,
+        [int]$FrameCount,
+        [string]$Directory,
+        [int]$LogicalCores
+    )
+    $threads = [Math]::Max(1, [int][Math]::Floor($LogicalCores / [double]$Lanes))
+    $tag = "$Backend-$($Device -replace '\W', '')-$Lanes"
+    $commands = for ($lane = 0; $lane -lt $Lanes; $lane++) {
+        New-SegmentCommand -Backend $Backend -Device $Device -SegmentDirectory $Directory -SegmentPath (Join-Path $Directory "$tag-$lane.mp4") -Prefix "$tag-$lane" -SegmentIndex 0 -StartFrame 0 -FrameCount $FrameCount -ThreadsPerLane $threads
+    }
+    $stopwatch = [Diagnostics.Stopwatch]::StartNew()
+    $processes = foreach ($command in $commands) {
+        $process = Start-Process -FilePath ([string]$script:Job.FfmpegPath) -ArgumentList (Join-Arguments ([string[]]$command.Arguments)) -PassThru -WindowStyle Hidden -RedirectStandardError ([string]$command.ErrorFile)
+        $null = $process.Handle
+        $process
+    }
+    [IO.File]::WriteAllLines([string]$script:Job.ChildPidPath, @($processes | ForEach-Object { [string]$_.Id }), [Text.Encoding]::ASCII)
+    # A broken driver can hang instead of failing. Ten seconds of video that
+    # takes three minutes is slower than any processor anyway.
+    $deadline = [DateTime]::UtcNow.AddMinutes(3)
+    $timedOut = $false
+    foreach ($process in $processes) {
+        $remaining = [int][Math]::Max(0, ($deadline - [DateTime]::UtcNow).TotalMilliseconds)
+        if (-not $process.WaitForExit($remaining)) { $timedOut = $true }
+    }
+    $stopwatch.Stop()
+    $failure = ''
+    if ($timedOut) {
+        foreach ($process in $processes) { try { if (-not $process.HasExited) { $process.Kill() } } catch {} }
+        foreach ($process in $processes) { $process.Dispose() }
+        return [pscustomobject]@{ Ok = $false; Failure = 'timed out after three minutes.'; Speed = 0.0; Output = '' }
+    }
+    for ($lane = 0; $lane -lt $Lanes; $lane++) {
+        $processes[$lane].Refresh()
+        if ($processes[$lane].ExitCode -ne 0) {
+            $details = Get-Content -LiteralPath ([string]$commands[$lane].ErrorFile) -Raw -ErrorAction SilentlyContinue
+            $failure = "FFmpeg code $($processes[$lane].ExitCode). $(([string]$details).Trim())"
+            break
+        }
+        $frames = Get-VideoPacketCount ([string]$commands[$lane].SegmentPath)
+        if ($frames -ne $FrameCount) { $failure = "lane $lane wrote $frames frames instead of $FrameCount."; break }
+    }
+    foreach ($process in $processes) { $process.Dispose() }
+    return [pscustomobject]@{
+        Ok = [string]::IsNullOrEmpty($failure)
+        Failure = $failure
+        Speed = ($Lanes * $FrameCount / [double]$fps) / [Math]::Max(0.001, $stopwatch.Elapsed.TotalSeconds)
+        Output = [string]$commands[0].SegmentPath
+    }
+}
+
+function Get-VideoSimilarity {
+    # Average and worst-frame luma PSNR of one render against another.
+    param([string]$Path, [string]$ReferencePath)
+    $result = Invoke-QuietFfmpeg -FfmpegPath ([string]$script:Job.FfmpegPath) -TimeoutSeconds 120 -Arguments @('-hide_banner', '-i', $Path, '-i', $ReferencePath, '-lavfi', 'psnr', '-f', 'null', '-')
+    $match = [regex]::Match($result.Error, 'PSNR y:(?<y>[\d.]+|inf).*?min:(?<min>[\d.]+|inf)')
+    if (-not $match.Success) { return $null }
+    $toNumber = { param($text) if ($text -eq 'inf') { 99.0 } else { [double]::Parse($text, [Globalization.CultureInfo]::InvariantCulture) } }
+    return [pscustomobject]@{ Average = (& $toNumber $match.Groups['y'].Value); Minimum = (& $toNumber $match.Groups['min'].Value) }
+}
+
+function Invoke-RenderCalibration {
+    # Measures this machine once and picks the fastest way to render on it.
+    # Every computer the tool runs on differs - NVIDIA, AMD or Intel graphics,
+    # integrated or not, four cores or sixteen - and the best setup cannot be
+    # read off a spec sheet: on the RTX A4000 laptop the GPU path gains
+    # nothing past four lanes, while its Intel iGPU stops gaining at two and
+    # still beats the i7's processor graph by a third. So each candidate
+    # renders the first ten seconds of the real video - its photographs, its
+    # watermark, its encoder - and the fastest is kept.
+    #
+    # A GPU must first pass the two-second motion test (every frame present,
+    # none repeated) and then match the processor's render of the same
+    # seconds: under 32 dB on average, or 25 dB on any frame, means its
+    # driver drew something else, and it is not used. The processor graph is
+    # the reference and the fallback; a GPU has to beat it by 5 percent to be
+    # chosen.
+    param([string]$Signature, [int]$ProcessorLanes, [int]$LogicalCores)
+
+    $directory = Join-Path $resumeDirectory 'calibration'
+    if (Test-Path -LiteralPath $directory) { Remove-Item -LiteralPath $directory -Recurse -Force }
+    New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    $frames = [Math]::Min(10 * $fps, $totalFrames)
+    $notes = [System.Collections.Generic.List[string]]::new()
+    $title = 'Optimizing for this PC (one time)'
+
+    Write-WorkerProgress 0 "$title - measuring the processor..."
+    $cpu = Measure-RenderConfiguration -Backend 'cpu' -Lanes $ProcessorLanes -FrameCount $frames -Directory $directory -LogicalCores $LogicalCores
+    $choice = [pscustomobject]@{ Backend = 'cpu'; Device = ''; DeviceName = 'Processor'; Lanes = $ProcessorLanes; Speed = $cpu.Speed }
+    if (-not $cpu.Ok) {
+        # Without a reference nothing can be judged; the render itself will
+        # report whatever is wrong.
+        $notes.Add("Processor reference failed: $($cpu.Failure)")
+    }
+    else {
+        $notes.Add(('Processor, {0} lanes: {1:0.00}x' -f $ProcessorLanes, $cpu.Speed))
+        $devices = @()
+        try { $devices = @(Get-OpenClDevices -FfmpegPath ([string]$script:Job.FfmpegPath)) } catch { $notes.Add("OpenCL devices could not be listed: $($_.Exception.Message)") }
+        foreach ($device in $devices) {
+            Write-WorkerProgress 0 "$title - testing $($device.Name)..."
+            $problem = Test-OpenClMotionDevice -FfmpegPath ([string]$script:Job.FfmpegPath) -Device $device.Device -WorkDirectory (Join-Path $directory "test-$($device.Device)")
+            if ($problem) { $notes.Add("$($device.Name): failed the motion test. $problem"); continue }
+            $laneCap = 4
+            if ($device.Vendor -eq 'nvidia') {
+                # Each lane holds its photographs, a watermark cycle and the
+                # crossfade buffers: 4 lanes peaked at 4.9 GB on an 8 GB card,
+                # and 8 overflowed it and ran at a quarter of the speed.
+                try {
+                    $memoryText = & nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>$null | Select-Object -First 1
+                    $memoryMb = 0
+                    if ([int]::TryParse(([string]$memoryText).Trim(), [ref]$memoryMb) -and $memoryMb -gt 0) {
+                        $laneCap = [Math]::Max(1, [Math]::Min(4, [int][Math]::Floor($memoryMb / 2048.0)))
+                    }
+                }
+                catch {}
+            }
+            $previous = 0.0
+            foreach ($lanes in @(1, 2, 4)) {
+                if ($lanes -gt $laneCap) { break }
+                Write-WorkerProgress 0 "$title - $($device.Name), $lanes at once..."
+                $measured = Measure-RenderConfiguration -Backend 'opencl' -Device $device.Device -Lanes $lanes -FrameCount $frames -Directory $directory -LogicalCores $LogicalCores
+                if (-not $measured.Ok) { $notes.Add("$($device.Name), $lanes lanes: failed. $($measured.Failure)"); break }
+                if ($lanes -eq 1) {
+                    $similarity = Get-VideoSimilarity -Path $measured.Output -ReferencePath $cpu.Output
+                    if ($null -eq $similarity -or $similarity.Average -lt 32 -or $similarity.Minimum -lt 25) {
+                        $shown = if ($null -eq $similarity) { 'could not be compared' } else { '{0:0.0} dB average, {1:0.0} dB worst' -f $similarity.Average, $similarity.Minimum }
+                        $notes.Add("$($device.Name): rejected, its render differs from the processor's ($shown).")
+                        break
+                    }
+                    $notes.Add(('{0}: matches the processor ({1:0.0} dB)' -f $device.Name, $similarity.Average))
+                }
+                $notes.Add(('{0}, {1} lanes: {2:0.00}x' -f $device.Name, $lanes, $measured.Speed))
+                if ($measured.Speed -gt $choice.Speed * $(if ($choice.Backend -eq 'cpu') { 1.05 } else { 1.0 })) {
+                    $choice = [pscustomobject]@{ Backend = 'opencl'; Device = $device.Device; DeviceName = $device.Name; Lanes = $lanes; Speed = $measured.Speed }
+                }
+                # Another lane that adds under 8 percent is not worth its
+                # video memory and processor time.
+                if ($lanes -gt 1 -and $measured.Speed -lt $previous * 1.08) { break }
+                $previous = $measured.Speed
+            }
+        }
+    }
+
+    $profileData = [ordered]@{
+        Signature = $Signature
+        CreatedUtc = [DateTime]::UtcNow.ToString('o')
+        Encoder = [string]$script:Job.Encoder
+        Backend = $choice.Backend
+        Device = $choice.Device
+        DeviceName = $choice.DeviceName
+        Lanes = $choice.Lanes
+        Speed = [Math]::Round($choice.Speed, 2)
+        Measurements = $notes.ToArray()
+    }
+    Write-WorkerDiagnostic ("Render calibration chose {0} ({1}, {2} lanes, {3:0.00}x). {4}" -f $choice.Backend, $choice.DeviceName, $choice.Lanes, $choice.Speed, ($notes -join ' | '))
+    try { Remove-Item -LiteralPath $directory -Recurse -Force -ErrorAction SilentlyContinue } catch {}
+    return [pscustomobject]$profileData
+}
+
+function Save-RenderProfile {
+    param([psobject]$ProfileData)
+    $path = [string]$script:RenderProfilePath
+    if ([string]::IsNullOrWhiteSpace($path)) { return }
+    try {
+        New-Item -ItemType Directory -Path (Split-Path -Parent $path) -Force | Out-Null
+        [IO.File]::WriteAllText($path, ($ProfileData | ConvertTo-Json -Depth 5), [Text.UTF8Encoding]::new($false))
+    }
+    catch { Write-WorkerDiagnostic "Could not save the render profile: $($_.Exception.Message)" }
 }
 
 function Write-WorkerDiagnostic {
@@ -601,31 +807,32 @@ try {
     if ([bool]$script:Job.ReusePreview -and (Test-Path -LiteralPath ([string]$script:Job.PreviewPath) -PathType Leaf)) {
         $previewSeconds = Get-MediaDuration ([string]$script:Job.PreviewPath)
     }
-    $openClDevice = if ($script:Job.PSObject.Properties['OpenClDevice']) { [string]$script:Job.OpenClDevice } else { '' }
-    $filterBackend = if ($script:Job.PSObject.Properties['FilterBackend']) { [string]$script:Job.FilterBackend } else { 'cpu' }
     $filterVulkanDeviceIndex = if ($script:Job.PSObject.Properties['FilterVulkanDeviceIndex']) { [int]$script:Job.FilterVulkanDeviceIndex } else { [int]$script:Job.VulkanDeviceIndex }
     $ffmpegLogLevel = if ($script:Job.PSObject.Properties['LogLevel']) { [string]$script:Job.LogLevel } else { 'error' }
     $captionPreset = if ($script:Job.Settings.PSObject.Properties['CaptionPreset']) { [string]$script:Job.Settings.CaptionPreset } else { '1. Clean YouTube' }
     $captionWordsPerLine = if ($script:Job.Settings.PSObject.Properties['CaptionWordsPerLine']) { [int]$script:Job.Settings.CaptionWordsPerLine } else { 8 }
-    $useOpenClMotion = $filterBackend -eq 'opencl' -and ([string]$script:Job.Encoder -eq 'h264_nvenc') -and -not [string]::IsNullOrWhiteSpace($openClDevice)
-    $backend = if ($useOpenClMotion) { 'opencl' } elseif ($filterBackend -eq 'vulkan') { 'vulkan' } else { 'cpu' }
-    # A video whose GPU render failed is finished on the processor, in a folder
-    # of its own. Mixing the two renderers' segments in one video is never
-    # wanted, and the marker keeps Resume on the processor for this video.
-    $segmentDirectory = $resumeDirectory
-    $processorDirectory = Join-Path $resumeDirectory 'processor'
-    $gpuFailureMarker = Join-Path $resumeDirectory 'gpu-failed.txt'
-    if ($backend -eq 'opencl' -and (Test-Path -LiteralPath $gpuFailureMarker -PathType Leaf)) {
-        $backend = 'cpu'
-        $segmentDirectory = $processorDirectory
-    }
+    $filterBackend = if ($script:Job.PSObject.Properties['FilterBackend']) { [string]$script:Job.FilterBackend } else { 'cpu' }
+    $processorLanes = if ($script:Job.PSObject.Properties['ParallelSegments']) { [int]$script:Job.ParallelSegments } else { 2 }
+    if ($processorLanes -lt 1) { $processorLanes = 1 }
+    # Divide the machine between the lanes explicitly. Left to itself every
+    # FFmpeg process starts as many filter threads as there are cores, so four
+    # lanes on an eight-core laptop ask for thirty-two threads and spend a
+    # noticeable share of the render context-switching between them.
+    $logicalCores = [Environment]::ProcessorCount
+    if ($logicalCores -lt 1) { $logicalCores = 1 }
+    $script:RenderProfilePath = if ($script:Job.PSObject.Properties['RenderProfilePath']) { [string]$script:Job.RenderProfilePath } else { '' }
+    # 'auto' (and the older 'opencl') means: render on whatever this machine
+    # was measured to do fastest. The Vulkan encoder takes only GPU frames of
+    # its own, so it stays on the processor graph.
+    $wantsGpu = $filterBackend -in @('auto', 'opencl') -and [string]$script:Job.Encoder -ne 'h264_vulkan' -and -not [string]::IsNullOrWhiteSpace($script:RenderProfilePath)
+
     # Measured once per video: the part of the frame the watermark touches and
     # the length of one cycle, so the GPU graph uploads only that rectangle,
     # once per segment. If the measurement fails the graph streams the whole
     # watermark, which is slower and identical.
     $watermarkRect = @()
     $watermarkLoopFrames = 0
-    if ($backend -eq 'opencl') {
+    if ($wantsGpu) {
         try {
             $footprint = Get-WatermarkFootprint -FfmpegPath ([string]$script:Job.FfmpegPath) -WatermarkPath ([string]$script:Job.WatermarkPath) -Fps $fps
             $watermarkRect = [int[]]$footprint.Rect
@@ -635,35 +842,54 @@ try {
             Write-WorkerDiagnostic "Could not measure the watermark; streaming it whole. $($_.Exception.Message)"
         }
     }
-    $processorLanes = if ($script:Job.PSObject.Properties['ParallelSegments']) { [int]$script:Job.ParallelSegments } else { 2 }
-    if ($processorLanes -lt 1) { $processorLanes = 1 }
-    # The GPU path stops gaining at about four lanes: on an RTX A4000 laptop 4,
-    # 6 and 8 lanes all measured 8.2-8.5x realtime, while the processor time
-    # they burned rose from 93 to 316 CPU-seconds per two minutes of video.
-    #
-    # Each GPU lane holds its photographs, one cycle of the watermark and the
-    # crossfade buffers in video memory: four lanes peaked at 4.9 GB on the
-    # 8 GB A4000, and eight overflowed it, after which the driver paged and
-    # the render fell to a quarter of its speed. So also one lane per 2 GB.
-    $gpuLanes = 4
-    if ($backend -eq 'opencl') {
-        try {
-            $memoryText = & nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>$null | Select-Object -First 1
-            $memoryMb = 0
-            if ([int]::TryParse(([string]$memoryText).Trim(), [ref]$memoryMb) -and $memoryMb -gt 0) {
-                $gpuLanes = [Math]::Max(1, [Math]::Min(4, [int][Math]::Floor($memoryMb / 2048.0)))
+
+    # Which renderer this video uses is decided once and written into its
+    # resume folder, so a resumed video carries on exactly as it started even
+    # if the machine has been measured again since.
+    $configPath = Join-Path $resumeDirectory 'render-config.json'
+    $config = $null
+    if (Test-Path -LiteralPath $configPath -PathType Leaf) {
+        try { $config = [IO.File]::ReadAllText($configPath, [Text.Encoding]::UTF8) | ConvertFrom-Json } catch { $config = $null }
+    }
+    if ($null -eq $config) {
+        $config = [pscustomobject]@{ Backend = 'cpu'; Device = ''; DeviceName = 'Processor'; Lanes = $processorLanes }
+        if ($filterBackend -eq 'vulkan') {
+            $config.Backend = 'vulkan'
+        }
+        elseif ($wantsGpu) {
+            try {
+                $signature = Get-RenderMachineSignature -Encoder ([string]$script:Job.Encoder) -FfmpegPath ([string]$script:Job.FfmpegPath) -PipelineVersion ([string]$script:Job.PipelineVersion)
+                $profileData = Read-RenderProfile -Path $script:RenderProfilePath -Signature $signature
+                if ($null -eq $profileData) {
+                    $profileData = Invoke-RenderCalibration -Signature $signature -ProcessorLanes $processorLanes -LogicalCores $logicalCores
+                    Save-RenderProfile -ProfileData $profileData
+                }
+                if ([string]$profileData.Backend -eq 'opencl' -and -not [string]::IsNullOrWhiteSpace([string]$profileData.Device)) {
+                    $config = [pscustomobject]@{ Backend = 'opencl'; Device = [string]$profileData.Device; DeviceName = [string]$profileData.DeviceName; Lanes = [Math]::Max(1, [int]$profileData.Lanes) }
+                }
+            }
+            catch {
+                Write-WorkerDiagnostic "Could not measure this machine; rendering on the processor. $($_.Exception.Message)"
             }
         }
-        catch {}
+        [IO.File]::WriteAllText($configPath, ($config | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
     }
-    $maximumParallel = if ($backend -eq 'opencl') { [Math]::Min($gpuLanes, $processorLanes) } else { $processorLanes }
-    # Divide the machine between the lanes explicitly. Left to itself every
-    # FFmpeg process starts as many filter threads as there are cores, so four
-    # lanes on an eight-core laptop ask for thirty-two threads and spend a
-    # noticeable share of the render context-switching between them.
-    $logicalCores = [Environment]::ProcessorCount
-    if ($logicalCores -lt 1) { $logicalCores = 1 }
+    $backend = [string]$config.Backend
+    $openClDevice = [string]$config.Device
+    $maximumParallel = if ($backend -eq 'opencl') { [Math]::Max(1, [int]$config.Lanes) } else { $processorLanes }
+    # A video whose GPU render failed is finished on the processor, in a folder
+    # of its own. Mixing the two renderers' segments in one video is never
+    # wanted, and the marker keeps Resume on the processor for this video.
+    $segmentDirectory = $resumeDirectory
+    $processorDirectory = Join-Path $resumeDirectory 'processor'
+    $gpuFailureMarker = Join-Path $resumeDirectory 'gpu-failed.txt'
+    if ($backend -eq 'opencl' -and (Test-Path -LiteralPath $gpuFailureMarker -PathType Leaf)) {
+        $backend = 'cpu'
+        $segmentDirectory = $processorDirectory
+        $maximumParallel = $processorLanes
+    }
     $threadsPerLane = [Math]::Max(1, [int][Math]::Floor($logicalCores / [double]$maximumParallel))
+    Write-WorkerProgress 0 "Rendering with $(if ($backend -eq 'opencl') { [string]$config.DeviceName } else { 'the processor' }), $maximumParallel at a time..."
     $loudnessTarget = if ($script:Job.PSObject.Properties['LoudnessTargetLufs']) { [double]$script:Job.LoudnessTargetLufs } else { -14.0 }
     $audioBitrate = if ([string]$script:Job.Settings.Quality -eq 'YouTube') { '384k' } else { '160k' }
     # The voiceover is encoded once, alongside the segments, and kept for
@@ -685,7 +911,7 @@ try {
     }
     $voiceoverTick = { Step-VoiceoverEncode -State $script:Voiceover }
 
-    $plan = New-SegmentJobs -Backend $backend -SegmentDirectory $segmentDirectory -ThreadsPerLane $threadsPerLane
+    $plan = New-SegmentJobs -Backend $backend -Device $openClDevice -SegmentDirectory $segmentDirectory -ThreadsPerLane $threadsPerLane
     try {
         $completedFrames = Invoke-ParallelSegmentJobs -Jobs $plan.Jobs -CompletedFrames $plan.CompletedFrames -TotalFrames $totalFrames -Fps $fps -MaximumParallel $maximumParallel -OnTick $voiceoverTick
     }
@@ -698,6 +924,13 @@ try {
         Start-Sleep -Seconds 2
         [IO.File]::WriteAllText($gpuFailureMarker, "[$([DateTime]::Now.ToString('s'))] $reason", [Text.UTF8Encoding]::new($false))
         Write-WorkerDiagnostic "GPU motion effects failed; rendering this video on the processor instead. $reason"
+        # Later videos on this machine go straight to the processor until it is
+        # measured again (a driver or hardware change, or Optimize for this PC).
+        try {
+            $signature = Get-RenderMachineSignature -Encoder ([string]$script:Job.Encoder) -FfmpegPath ([string]$script:Job.FfmpegPath) -PipelineVersion ([string]$script:Job.PipelineVersion)
+            Save-RenderProfile -ProfileData ([ordered]@{ Signature = $signature; CreatedUtc = [DateTime]::UtcNow.ToString('o'); Encoder = [string]$script:Job.Encoder; Backend = 'cpu'; Device = ''; DeviceName = 'Processor'; Lanes = $processorLanes; Speed = 0; Measurements = @("$([string]$config.DeviceName) failed during a render: $reason") })
+        }
+        catch {}
         Write-WorkerProgress 0 'GPU effects failed; rendering this video on the processor instead...'
         $backend = 'cpu'
         $segmentDirectory = $processorDirectory
