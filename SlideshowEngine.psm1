@@ -239,7 +239,9 @@ function Get-RenderMachineSignature {
         [string]$PipelineVersion = ''
     )
     $parts = [System.Collections.Generic.List[string]]::new()
-    $parts.Add('render-profile-v1'); $parts.Add($Encoder); $parts.Add($FfmpegPath); $parts.Add($PipelineVersion)
+    # v2: lane counts are judged on measured GPU memory, so every machine
+    # measured with the old fixed limit is measured again.
+    $parts.Add('render-profile-v2'); $parts.Add($Encoder); $parts.Add($FfmpegPath); $parts.Add($PipelineVersion)
     try { foreach ($cpu in @(Get-CimInstance -ClassName Win32_Processor -ErrorAction Stop)) { $parts.Add("$($cpu.Name)|$($cpu.NumberOfLogicalProcessors)") } } catch {}
     try { foreach ($gpu in @(Get-CimInstance -ClassName Win32_VideoController -ErrorAction Stop | Sort-Object Name)) { $parts.Add("$($gpu.Name)|$($gpu.DriverVersion)") } } catch {}
     try { $parts.Add([string][Math]::Round((Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop).TotalPhysicalMemory / 1GB)) } catch {}

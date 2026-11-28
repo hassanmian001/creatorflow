@@ -493,8 +493,12 @@ spends about a minute on the first ten seconds of the real video (status:
      repeated;
    - a render compared with the processor's, rejected under 32 dB average or
      25 dB on any frame;
-   - then 1, 2 and 4 lanes at once. It stops when another lane adds under 8
-     percent, and on NVIDIA it allows one lane per 2 GB of memory.
+   - then 1, 2 and 4 lanes at once (1 to 4 on NVIDIA). It stops when another
+     lane adds under 8 percent. On NVIDIA the card's memory is watched during
+     each step, and a lane count that peaks above 80 percent of it is not used.
+     A lane took about 780 MB on the A4000. On a 4 GB Quadro P1000 the old
+     fixed limit of one lane per 2 GB had held it at 2 lanes, while going from
+     1 to 2 had nearly doubled its speed (2.55x to 4.36x).
 3. It keeps the fastest. A GPU must beat the processor by 5 percent.
 
 The result is saved as `render-profile.json` beside the settings, tied to the

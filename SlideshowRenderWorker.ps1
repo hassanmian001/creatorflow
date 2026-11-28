@@ -603,7 +603,10 @@ function Measure-RenderConfiguration {
         [int]$Lanes,
         [int]$FrameCount,
         [string]$Directory,
-        [int]$LogicalCores
+        [int]$LogicalCores,
+        # Sample the NVIDIA card's memory while the lanes run and report the
+        # peak, so a lane count is judged on what it really uses.
+        [switch]$WatchNvidiaMemory
     )
     $threads = [Math]::Max(1, [int][Math]::Floor($LogicalCores / [double]$Lanes))
     $tag = "$Backend-$($Device -replace '\W', '')-$Lanes"
@@ -611,6 +614,7 @@ function Measure-RenderConfiguration {
         New-SegmentCommand -Backend $Backend -Device $Device -SegmentDirectory $Directory -SegmentPath (Join-Path $Directory "$tag-$lane.mp4") -Prefix "$tag-$lane" -SegmentIndex 0 -StartFrame 0 -FrameCount $FrameCount -ThreadsPerLane $threads
     }
     $stopwatch = [Diagnostics.Stopwatch]::StartNew()
+    $startedAt = [DateTime]::Now
     $processes = foreach ($command in $commands) {
         $process = Start-Process -FilePath ([string]$script:Job.FfmpegPath) -ArgumentList (Join-Arguments ([string[]]$command.Arguments)) -PassThru -WindowStyle Hidden -RedirectStandardError ([string]$command.ErrorFile)
         $null = $process.Handle
@@ -621,17 +625,40 @@ function Measure-RenderConfiguration {
     # takes three minutes is slower than any processor anyway.
     $deadline = [DateTime]::UtcNow.AddMinutes(3)
     $timedOut = $false
-    foreach ($process in $processes) {
-        $remaining = [int][Math]::Max(0, ($deadline - [DateTime]::UtcNow).TotalMilliseconds)
-        if (-not $process.WaitForExit($remaining)) { $timedOut = $true }
+    $peakMemoryMb = 0
+    if ($WatchNvidiaMemory) {
+        while (@($processes | Where-Object { -not $_.HasExited }).Count -gt 0) {
+            if ([DateTime]::UtcNow -gt $deadline) { $timedOut = $true; break }
+            try {
+                $usedText = & nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits 2>$null | Select-Object -First 1
+                $usedMb = 0
+                if ([int]::TryParse(([string]$usedText).Trim(), [ref]$usedMb) -and $usedMb -gt $peakMemoryMb) { $peakMemoryMb = $usedMb }
+            }
+            catch {}
+            Start-Sleep -Milliseconds 300
+        }
+    }
+    else {
+        foreach ($process in $processes) {
+            $remaining = [int][Math]::Max(0, ($deadline - [DateTime]::UtcNow).TotalMilliseconds)
+            if (-not $process.WaitForExit($remaining)) { $timedOut = $true }
+        }
     }
     $stopwatch.Stop()
     $failure = ''
     if ($timedOut) {
         foreach ($process in $processes) { try { if (-not $process.HasExited) { $process.Kill() } } catch {} }
         foreach ($process in $processes) { $process.Dispose() }
-        return [pscustomobject]@{ Ok = $false; Failure = 'timed out after three minutes.'; Speed = 0.0; Output = '' }
+        return [pscustomobject]@{ Ok = $false; Failure = 'timed out after three minutes.'; Speed = 0.0; Output = ''; PeakMemoryMb = $peakMemoryMb }
     }
+    foreach ($process in $processes) { $process.WaitForExit() }
+    # Timed to the last lane's exit, not to when the polling loop noticed it.
+    $elapsedSeconds = $stopwatch.Elapsed.TotalSeconds
+    try {
+        $lastExit = ($processes | ForEach-Object { $_.ExitTime } | Measure-Object -Maximum).Maximum
+        if ($null -ne $lastExit) { $elapsedSeconds = [Math]::Min($elapsedSeconds, ($lastExit - $startedAt).TotalSeconds) }
+    }
+    catch {}
     for ($lane = 0; $lane -lt $Lanes; $lane++) {
         $processes[$lane].Refresh()
         if ($processes[$lane].ExitCode -ne 0) {
@@ -646,8 +673,9 @@ function Measure-RenderConfiguration {
     return [pscustomobject]@{
         Ok = [string]::IsNullOrEmpty($failure)
         Failure = $failure
-        Speed = ($Lanes * $FrameCount / [double]$fps) / [Math]::Max(0.001, $stopwatch.Elapsed.TotalSeconds)
+        Speed = ($Lanes * $FrameCount / [double]$fps) / [Math]::Max(0.001, $elapsedSeconds)
         Output = [string]$commands[0].SegmentPath
+        PeakMemoryMb = $peakMemoryMb
     }
 }
 
@@ -702,26 +730,35 @@ function Invoke-RenderCalibration {
             Write-WorkerProgress 0 "$title - testing $($device.Name)..."
             $problem = Test-OpenClMotionDevice -FfmpegPath ([string]$script:Job.FfmpegPath) -Device $device.Device -WorkDirectory (Join-Path $directory "test-$($device.Device)")
             if ($problem) { $notes.Add("$($device.Name): failed the motion test. $problem"); continue }
-            $laneCap = 4
+            # Each lane holds its photographs, a watermark cycle and the
+            # crossfade buffers in video memory. Overflowing it is what to
+            # avoid: 8 lanes on an 8 GB card did, and ran at a quarter of the
+            # speed. On NVIDIA the card's memory is watched during each lane
+            # count and one that peaks above 80 percent is not used - the
+            # margin covers a channel whose watermark is bigger than the one
+            # measured (each lane took about 780 MB on the A4000). That
+            # replaced a fixed one lane per 2 GB, which held a
+            # 4 GB Quadro P1000 at 2 lanes while 1 -> 2 had nearly doubled its
+            # speed. Other makers report no memory figure; 3 is skipped for
+            # them so the test stays short.
+            $memoryTotalMb = 0
             if ($device.Vendor -eq 'nvidia') {
-                # Each lane holds its photographs, a watermark cycle and the
-                # crossfade buffers: 4 lanes peaked at 4.9 GB on an 8 GB card,
-                # and 8 overflowed it and ran at a quarter of the speed.
                 try {
                     $memoryText = & nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>$null | Select-Object -First 1
-                    $memoryMb = 0
-                    if ([int]::TryParse(([string]$memoryText).Trim(), [ref]$memoryMb) -and $memoryMb -gt 0) {
-                        $laneCap = [Math]::Max(1, [Math]::Min(4, [int][Math]::Floor($memoryMb / 2048.0)))
-                    }
+                    [void][int]::TryParse(([string]$memoryText).Trim(), [ref]$memoryTotalMb)
                 }
                 catch {}
             }
+            $laneSteps = if ($memoryTotalMb -gt 0) { @(1, 2, 3, 4) } else { @(1, 2, 4) }
             $previous = 0.0
-            foreach ($lanes in @(1, 2, 4)) {
-                if ($lanes -gt $laneCap) { break }
+            foreach ($lanes in $laneSteps) {
                 Write-WorkerProgress 0 "$title - $($device.Name), $lanes at once..."
-                $measured = Measure-RenderConfiguration -Backend 'opencl' -Device $device.Device -Lanes $lanes -FrameCount $frames -Directory $directory -LogicalCores $LogicalCores
+                $measured = Measure-RenderConfiguration -Backend 'opencl' -Device $device.Device -Lanes $lanes -FrameCount $frames -Directory $directory -LogicalCores $LogicalCores -WatchNvidiaMemory:($memoryTotalMb -gt 0)
                 if (-not $measured.Ok) { $notes.Add("$($device.Name), $lanes lanes: failed. $($measured.Failure)"); break }
+                if ($memoryTotalMb -gt 0 -and $measured.PeakMemoryMb -gt 0.80 * $memoryTotalMb) {
+                    $notes.Add(('{0}, {1} lanes: {2:0.00}x but used {3} of {4} MB of video memory; not used.' -f $device.Name, $lanes, $measured.Speed, $measured.PeakMemoryMb, $memoryTotalMb))
+                    break
+                }
                 if ($lanes -eq 1) {
                     $similarity = Get-VideoSimilarity -Path $measured.Output -ReferencePath $cpu.Output
                     if ($null -eq $similarity -or $similarity.Average -lt 32 -or $similarity.Minimum -lt 25) {
@@ -731,7 +768,8 @@ function Invoke-RenderCalibration {
                     }
                     $notes.Add(('{0}: matches the processor ({1:0.0} dB)' -f $device.Name, $similarity.Average))
                 }
-                $notes.Add(('{0}, {1} lanes: {2:0.00}x' -f $device.Name, $lanes, $measured.Speed))
+                $memoryNote = if ($measured.PeakMemoryMb -gt 0) { " ($($measured.PeakMemoryMb) of $memoryTotalMb MB)" } else { '' }
+                $notes.Add(('{0}, {1} lanes: {2:0.00}x{3}' -f $device.Name, $lanes, $measured.Speed, $memoryNote))
                 if ($measured.Speed -gt $choice.Speed * $(if ($choice.Backend -eq 'cpu') { 1.05 } else { 1.0 })) {
                     $choice = [pscustomobject]@{ Backend = 'opencl'; Device = $device.Device; DeviceName = $device.Name; Lanes = $lanes; Speed = $measured.Speed }
                 }
