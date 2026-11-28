@@ -679,6 +679,54 @@ function Measure-RenderConfiguration {
     }
 }
 
+function Measure-EncoderCeiling {
+    # How fast the video encoder alone goes on this machine: Lanes copies of
+    # the processor's calibration render, decoded and encoded again with the
+    # job's own encoder and settings, all at once. No effects, no photographs -
+    # only the encode. When the best render already runs at about this speed,
+    # the encoder is the wall and more lanes or a faster GPU graph cannot help;
+    # the calibration notes say so, which is what tells a slow machine's cause
+    # apart from a slow graph.
+    param([string]$SourcePath, [int]$Lanes, [string]$Directory, [int]$LogicalCores)
+    $threads = [Math]::Max(1, [int][Math]::Floor($LogicalCores / [double]$Lanes))
+    $encoding = @(Get-EncodingArguments -Encoder ([string]$script:Job.Encoder) -Quality ([string]$script:Job.Settings.Quality) -Fps $fps)
+    $frames = Get-VideoPacketCount $SourcePath
+    if ($frames -le 0) { return $null }
+    $runs = for ($lane = 0; $lane -lt $Lanes; $lane++) {
+        $output = Join-Path $Directory "encoder-only-$lane.mp4"
+        $errorFile = Join-Path $Directory "encoder-only-$lane.log"
+        $arguments = @('-y', '-hide_banner', '-loglevel', 'error', '-nostats', '-threads', [string]$threads, '-i', $SourcePath, '-map', '0:v:0') + $encoding + @('-threads', [string]$threads, '-an', $output)
+        [pscustomobject]@{ Arguments = $arguments; ErrorFile = $errorFile; Output = $output }
+    }
+    $startedAt = [DateTime]::Now
+    $stopwatch = [Diagnostics.Stopwatch]::StartNew()
+    $processes = foreach ($run in $runs) {
+        $process = Start-Process -FilePath ([string]$script:Job.FfmpegPath) -ArgumentList (Join-Arguments ([string[]]$run.Arguments)) -PassThru -WindowStyle Hidden -RedirectStandardError ([string]$run.ErrorFile)
+        $null = $process.Handle
+        $process
+    }
+    [IO.File]::WriteAllLines([string]$script:Job.ChildPidPath, @($processes | ForEach-Object { [string]$_.Id }), [Text.Encoding]::ASCII)
+    $deadline = [DateTime]::UtcNow.AddMinutes(2)
+    $ok = $true
+    foreach ($process in $processes) {
+        $remaining = [int][Math]::Max(0, ($deadline - [DateTime]::UtcNow).TotalMilliseconds)
+        if (-not $process.WaitForExit($remaining)) { $ok = $false }
+    }
+    $stopwatch.Stop()
+    $elapsedSeconds = $stopwatch.Elapsed.TotalSeconds
+    if ($ok) {
+        try {
+            $lastExit = ($processes | ForEach-Object { $_.ExitTime } | Measure-Object -Maximum).Maximum
+            if ($null -ne $lastExit) { $elapsedSeconds = [Math]::Min($elapsedSeconds, ($lastExit - $startedAt).TotalSeconds) }
+        }
+        catch {}
+        foreach ($process in $processes) { $process.Refresh(); if ($process.ExitCode -ne 0) { $ok = $false } }
+    }
+    foreach ($process in $processes) { try { if (-not $process.HasExited) { $process.Kill() } } catch {}; $process.Dispose() }
+    if (-not $ok) { return $null }
+    return ($Lanes * $frames / [double]$fps) / [Math]::Max(0.001, $elapsedSeconds)
+}
+
 function Get-VideoSimilarity {
     # Average and worst-frame luma PSNR of one render against another.
     param([string]$Path, [string]$ReferencePath)
@@ -778,6 +826,15 @@ function Invoke-RenderCalibration {
                 if ($lanes -gt 1 -and $measured.Speed -lt $previous * 1.08) { break }
                 $previous = $measured.Speed
             }
+        }
+
+        Write-WorkerProgress 0 "$title - measuring the video encoder..."
+        $ceiling = $null
+        try { $ceiling = Measure-EncoderCeiling -SourcePath $cpu.Output -Lanes ([int]$choice.Lanes) -Directory $directory -LogicalCores $LogicalCores } catch {}
+        if ($null -eq $ceiling) { $notes.Add('Encoder alone: could not be measured.') }
+        else {
+            $verdict = if ($choice.Speed -ge 0.85 * $ceiling) { 'the video encoder is the limit on this PC' } else { 'the encoder has room to spare' }
+            $notes.Add(('Encoder alone, {0} at once: {1:0.00}x - {2}' -f $choice.Lanes, $ceiling, $verdict))
         }
     }
 

@@ -134,7 +134,7 @@ $script:DataRoot = Join-Path $env:LOCALAPPDATA 'SlideshowVideoTool'
 # Bumped when the renderer started being chosen per machine. Each video's
 # resume folder now records which renderer it started on (render-config.json),
 # and folders from before that do not say.
-$script:RenderPipelineVersion = 'motion-v16-measured-per-machine'
+$script:RenderPipelineVersion = 'motion-v17-encoder-ceiling'
 $script:SettingsPath = Join-Path $script:DataRoot 'settings.json'
 # What the render worker measured this machine to do fastest; see Invoke-RenderCalibration.
 $script:RenderProfilePath = Join-Path $script:DataRoot 'render-profile.json'
