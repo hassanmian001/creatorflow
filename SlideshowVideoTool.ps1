@@ -2223,10 +2223,19 @@ function Test-VideoEncoder {
             return $false
         }
 
-        # The probe creates one 64x64 frame, so both streams remain tiny.
+        $errorTask = $process.StandardError.ReadToEndAsync()
         [void]$process.StandardOutput.ReadToEnd()
-        [void]$process.StandardError.ReadToEnd()
         $process.WaitForExit()
+        if ($process.ExitCode -ne 0) {
+            # Say why. A laptop whose NVENC was refused used to fall through to
+            # a slower encoder with nothing in the log to show the cause, which
+            # is usually an NVIDIA driver older than this FFmpeg's NVENC API.
+            $reason = (($errorTask.Result -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -First 4) -join ' ').Trim()
+            if ($Encoder -eq 'h264_nvenc' -and $reason -match '(?i)driver|nvenc API version') {
+                $reason += ' - Updating the NVIDIA graphics driver should make NVENC available.'
+            }
+            Write-ToolDiagnostic "Encoder probe failed: $Encoder. $reason"
+        }
         return ($process.ExitCode -eq 0)
     }
     catch {
@@ -2450,6 +2459,22 @@ function Select-AvailableEncoder {
         return $script:SelectedEncoder
     }
 
+    # Quick Sync before the Vulkan encoder. On a Precision 5530 (Quadro P1000
+    # + UHD 630) whose NVENC was refused, the Vulkan encoder rendered at 0.9x
+    # realtime: it accepted only one encode at a time, so the batch ran in a
+    # single lane; it only takes frames from the processor graph, so the GPU
+    # motion path and the speed test never ran; and on that Optimus laptop
+    # its device index vanished while the NVIDIA card slept, failing renders
+    # mid-batch ("Unable to find device with index 1"). Quick Sync takes many
+    # encodes at once and works with any filter graph.
+    $StatusText.Text = 'NVENC unavailable; checking Intel Quick Sync...'
+    $window.Dispatcher.Invoke([action]{}, [Windows.Threading.DispatcherPriority]::Background)
+    if (Test-VideoEncoder 'h264_qsv') {
+        $script:SelectedEncoder = 'h264_qsv'
+        $EncoderText.Text = 'Intel Quick Sync hardware encoding'
+        return $script:SelectedEncoder
+    }
+
     $StatusText.Text = 'NVENC unavailable; checking NVIDIA Vulkan...'
     $window.Dispatcher.Invoke([action]{}, [Windows.Threading.DispatcherPriority]::Background)
     $vulkanDevice = Find-NvidiaVulkanEncoderDevice
@@ -2457,14 +2482,6 @@ function Select-AvailableEncoder {
         $script:VulkanDeviceIndex = [int]$vulkanDevice
         $script:SelectedEncoder = 'h264_vulkan'
         $EncoderText.Text = 'NVIDIA GPU - Vulkan H.264 fallback'
-        return $script:SelectedEncoder
-    }
-
-    $StatusText.Text = 'NVENC unavailable; checking Intel Quick Sync...'
-    $window.Dispatcher.Invoke([action]{}, [Windows.Threading.DispatcherPriority]::Background)
-    if (Test-VideoEncoder 'h264_qsv') {
-        $script:SelectedEncoder = 'h264_qsv'
-        $EncoderText.Text = 'Intel Quick Sync fallback'
         return $script:SelectedEncoder
     }
 
@@ -7266,11 +7283,19 @@ $renderTimer.Add_Tick({
                 Complete-VideoRender
             }
         }
+        $script:RenderMonitorFailures = 0
     }
     catch {
-        $renderTimer.Stop()
-        Write-ToolDiagnostic 'Unhandled render-progress error.' $_.Exception
-        Show-ErrorMessage "The render monitor encountered an error, but the tool will remain open:`r`n`r`n$($_.Exception.Message)`r`n`r`nDiagnostic log:`r`n$script:DiagnosticLogPath"
+        # One bad tick - a progress file caught half-written, say - used to stop
+        # this timer for good: the render carried on, but the window never
+        # updated or finished it. Now it takes five failures in a row, and the
+        # log records where each one happened.
+        $script:RenderMonitorFailures = [int]$script:RenderMonitorFailures + 1
+        Write-ToolDiagnostic "Unhandled render-progress error ($($script:RenderMonitorFailures) in a row). $($_.ScriptStackTrace)" $_.Exception
+        if ($script:RenderMonitorFailures -ge 5) {
+            $renderTimer.Stop()
+            Show-ErrorMessage "The render monitor encountered an error, but the tool will remain open:`r`n`r`n$($_.Exception.Message)`r`n`r`nDiagnostic log:`r`n$script:DiagnosticLogPath"
+        }
     }
 })
 

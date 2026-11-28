@@ -76,7 +76,7 @@ A portable Windows 11 tool for turning a folder of images and a voiceover into a
 - Supports **Burned only** output when captions should be embedded without creating a separate SRT file.
 - Includes ten reference-matched caption presets covering bold outlined YouTube,
   newsroom, minimal, boxed, colored, documentary, upper-safe, and compact styles.
-- Automatically falls back to NVIDIA Vulkan, Intel Quick Sync, and finally CPU encoding.
+- Automatically falls back to Intel Quick Sync, NVIDIA Vulkan, and finally CPU encoding. Quick Sync comes first: the Vulkan encoder takes one encode at a time and only the processor graph's frames, and on a Quadro P1000 laptop it rendered at 0.9x realtime.
 - Saves and reopens projects, including the generated timeline.
 
 ## One-time setup
@@ -368,7 +368,7 @@ The tool measures the machine it finds itself on rather than assuming:
 
 | It checks | What it does with the answer |
 |---|---|
-| Video encoder | Probes NVIDIA NVENC, then AMD AMF, then NVIDIA Vulkan, then Intel Quick Sync, and finally falls back to CPU encoding. Each probe encodes a real 1920x1080 frame, because hardware encoders reject frames below a minimum size and would otherwise report themselves as missing. The chosen one is named in the top-right of the window. |
+| Video encoder | Probes NVIDIA NVENC, then AMD AMF, then Intel Quick Sync, then NVIDIA Vulkan, and finally falls back to CPU encoding. A refused encoder's reason is written to the diagnostic log (for NVENC, usually a driver older than FFmpeg's NVENC API). Each probe encodes a real 1920x1080 frame, because hardware encoders reject frames below a minimum size and would otherwise report themselves as missing. The chosen one is named in the top-right of the window. |
 | Motion-effects processor | Measured on each machine: the processor or any OpenCL graphics chip (NVIDIA, AMD, Intel, integrated or not), whichever is fastest and draws the same picture. See **Measured per machine** below. |
 | Processor cores and installed memory | Picks how many 30-second segments render at once — 1 lane on a small laptop, up to 6 on a workstation. |
 | OpenCL device and lane count | Chosen by that measurement and saved per machine. Without a usable device everything runs on the processor, and its frames differ from the GPU's by about 48 dB, which no one can see. |
